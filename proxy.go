@@ -460,7 +460,11 @@ func (h *proxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	removeHopByHop(w.Header(), false)
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	// flushingCopy preserves event-by-event delivery for streaming responses
+	// (text/event-stream from LLM proxies, gRPC-web, long-poll endpoints).
+	// Plain io.Copy leaves the http.ResponseWriter's bufio buffer un-flushed
+	// between writes, batching SSE events into one chunk at end-of-body.
+	flushingCopy(w, resp.Body)
 }
 
 // serveHijack handles HTTP/1.x CONNECT by hijacking the connection.
