@@ -17,11 +17,16 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.cloudflare.json"
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.cloudflare.json",
+    "test:workerd": "vitest run"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
     "@cloudflare/workers-types": "^5.20261009.1",
     "@types/bun": "latest",
-    "typescript": "^5.9.0"
+    "@vitest/runner": "^4.1.0",
+    "@vitest/snapshot": "^4.1.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0"
   }
 }

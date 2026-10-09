@@ -89,6 +89,17 @@ export interface SessionOptions {
 
   /** How long a half-closed stream waits for the peer's FIN before it is reset. Default 5 min. 0 disables. */
   closeTimeoutMs?: number;
+
+  /**
+   * The first stream ID this end opens; odd for a client, even for a server.
+   * A session rebuilt over a connection that outlived its predecessor — a
+   * Durable Object waking from hibernation — starts past every ID the old one
+   * may have used: the peer may still hold one of them.
+   */
+  firstStreamId?: number;
+
+  /** Called with each stream ID this end opens, before the peer hears of it. */
+  onOpen?: (id: number) => void;
 }
 
 // Signal is a channel with no value: wait for the next notify.
@@ -115,6 +126,7 @@ export class Session {
   /** @internal */ readonly closeTimeoutMs: number;
   private readonly acceptBacklog: number;
   private readonly openTimeoutMs: number;
+  private readonly onOpen: ((id: number) => void) | undefined;
 
   private nextStreamId: number;
   private readonly streams = new Map<number, Stream>();
@@ -144,7 +156,11 @@ export class Session {
     private readonly transport: Transport,
     opts: SessionOptions = {},
   ) {
-    this.nextStreamId = opts.client ? 1 : 2;
+    this.nextStreamId = opts.firstStreamId ?? (opts.client ? 1 : 2);
+    if (this.nextStreamId % 2 !== (opts.client ? 1 : 0) || this.nextStreamId < 1) {
+      throw new RangeError(`firstStreamId ${this.nextStreamId} is not a ${opts.client ? "client (odd)" : "server (even)"} ID`);
+    }
+    this.onOpen = opts.onOpen;
     this.maxStreamWindow = opts.maxStreamWindow ?? 1024 * 1024;
     if (this.maxStreamWindow < INITIAL_STREAM_WINDOW || this.maxStreamWindow > 0xffffffff) {
       throw new RangeError(`maxStreamWindow ${this.maxStreamWindow} outside [${INITIAL_STREAM_WINDOW}, 2^32)`);
@@ -191,6 +207,7 @@ export class Session {
     const id = this.nextStreamId;
     if (id >= 0xffffffff - 1) throw new YamuxError("streams_exhausted");
     this.nextStreamId += 2;
+    this.onOpen?.(id);
 
     const stream = new Stream(this, id, State.Init);
     this.streams.set(id, stream);

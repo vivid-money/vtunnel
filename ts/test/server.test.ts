@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { encodeFrame, FrameReader, type StreamHeader, type StreamReply } from "../src/frame.ts";
 import { NoRouteError, TunnelServer } from "../src/server.ts";
 import type { Session } from "../src/yamux.ts";
@@ -84,7 +84,7 @@ describe("control streams", () => {
       const reply = await request(session, { type: "policy", policy });
       expect(reply.ok).toBe(false);
       expect(reply.policyApplied).toBeUndefined();
-      expect(reply.error).toBeString();
+      expect(typeof reply.error).toBe("string");
     }
   });
 
@@ -177,6 +177,36 @@ describe("tunnels", () => {
     const read = t.stream.readable.getReader().read().catch((e) => e);
     a.session.close();
     expect(await read).toMatchObject({ code: "session_shutdown" });
+  });
+});
+
+describe("resuming and liveness", () => {
+  test("routes given to attach are served at once; changes are reported whole", async () => {
+    const server = new TunnelServer(quiet);
+    const p = pair();
+    const reported: [number, string[]][][] = [];
+    void server.attach(p.server, "a", { routes: [[50000, ["api.corp"]]], onRoutes: (r) => reported.push(r) });
+    expect(server.routes("api.corp:443")).toBe(true);
+
+    const t = server.openTunnel("api.corp:443");
+    const { header } = await nextTunnel(p.client);
+    expect(header).toEqual({ type: "tunnel", port: 50000 });
+    await t;
+
+    await request(p.client, { type: "listen", domains: ["db.corp"] });
+    expect(reported).toEqual([[[50000, ["api.corp"]], [49152, ["db.corp"]]]]);
+  });
+
+  test("a session its alive() gives up on is closed, and calls go elsewhere", async () => {
+    const server = new TunnelServer(quiet);
+    const dead = pair();
+    const live = pair();
+    let answering = true;
+    void server.attach(dead.server, "dead", { routes: [[1, ["api.corp"]]], alive: () => answering });
+    void server.attach(live.server, "live", { routes: [[2, ["api.corp"]]] });
+    answering = false;
+    for (let i = 0; i < 3; i++) expect((await server.openTunnel("api.corp:443")).session).toBe("live");
+    expect(dead.server.isClosed).toBe(true);
   });
 });
 

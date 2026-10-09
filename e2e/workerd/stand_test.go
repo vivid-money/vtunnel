@@ -195,7 +195,7 @@ func (s *stand) addController() {
 	s.t.Helper()
 	logs := &syncBuffer{}
 	cmd := exec.Command(controller, "-url", s.tunnelURL(), "-protocol", "yamux-wss",
-		"-upgrade-key", upgradeKey, "-ca", certFile)
+		"-upgrade-key", upgradeKey, "-ca", certFile, "-keepalive", "1s")
 	cmd.Stderr = logs
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -236,6 +236,7 @@ func (s *stand) tunnelURL() string { return fmt.Sprintf("wss://%s/tunnel", s.add
 
 type status struct {
 	Controllers int  `json:"controllers"`
+	Streams     int  `json:"streams"`
 	Routes      bool `json:"routes"`
 }
 

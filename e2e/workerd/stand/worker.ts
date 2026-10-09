@@ -19,7 +19,19 @@ interface Env {
   VTUNNEL_UPGRADE_KEY: string;
 }
 
-export class EgressTunnel extends VTunnelObject<Env> {}
+export class EgressTunnel extends VTunnelObject<Env> {
+  // The stand's controllers ping every second, so a few seconds of silence
+  // is a dead one; the default is for a 30-second heartbeat.
+  protected override readonly staleMs = 4_000;
+
+  // Made once per construction: a new value means the object was evicted and
+  // built again — woken from hibernation, or restarted.
+  private readonly incarnation = crypto.randomUUID();
+
+  async whoami(): Promise<string> {
+    return this.incarnation;
+  }
+}
 
 export class Egress extends EgressGateway<Env, { app: string }> {
   protected tunnel() {
@@ -40,7 +52,9 @@ export default {
       }
       case "/status":
         return Response.json({
+          incarnation: await tunnel.whoami(),
           controllers: await tunnel.controllers(),
+          streams: await tunnel.openStreams(),
           routes: await tunnel.routes(url.searchParams.get("host") ?? "fwd.test:80"),
         });
       case "/run": {

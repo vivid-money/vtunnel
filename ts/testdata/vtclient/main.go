@@ -47,6 +47,7 @@ func main() {
 	handshakes := flag.Int("handshakes", 0, "connect and close this many times, report, exit")
 	protocol := flag.String("protocol", string(vtunnel.ProtocolYamuxInsecure), "session protocol")
 	upgradeKey := flag.String("upgrade-key", "", "upgrade key, for yamux-wss")
+	keepAlive := flag.Duration("keepalive", 0, "keepalive interval (0 = the default)")
 	caFile := flag.String("ca", "", "PEM roots to trust for wss:// (test builds only: -tags vtunnel_testing)")
 	flag.Parse()
 	log.SetFlags(0)
@@ -92,6 +93,9 @@ func main() {
 	}
 	if *upgradeKey != "" {
 		opts = append(opts, vtunnel.WithUpgradeKey(*upgradeKey))
+	}
+	if *keepAlive > 0 {
+		opts = append(opts, vtunnel.WithKeepAlive(*keepAlive))
 	}
 	if *caFile != "" {
 		opts = append(opts, testRoots(*caFile))

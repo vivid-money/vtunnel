@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { Session, YamuxError } from "../src/yamux.ts";
 import { pair, rawFrame, randomBytes, readAll, str, text, tick, writeAll } from "./helpers.ts";
 
@@ -190,6 +190,21 @@ describe("session", () => {
     const [, got] = await Promise.all([writeAll(c, data, 777), readAll(c.readable)]);
     expect(Buffer.compare(got, data)).toBe(0);
     await serverSide;
+  });
+});
+
+describe("resuming a session", () => {
+  test("firstStreamId carries on numbering; onOpen sees every ID first", async () => {
+    const seen: number[] = [];
+    const s = new Session({ send: () => {}, close: () => {} }, { firstStreamId: 4100, onOpen: (id) => seen.push(id) });
+    expect((await s.open()).id).toBe(4100);
+    expect((await s.open()).id).toBe(4102);
+    expect(seen).toEqual([4100, 4102]);
+  });
+
+  test("an ID of the wrong parity is refused", () => {
+    expect(() => new Session({ send: () => {}, close: () => {} }, { firstStreamId: 3 })).toThrow(RangeError);
+    expect(() => new Session({ send: () => {}, close: () => {} }, { client: true, firstStreamId: 2 })).toThrow(RangeError);
   });
 });
 

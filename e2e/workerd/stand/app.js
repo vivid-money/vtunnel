@@ -90,6 +90,67 @@ const cases = {
     return out;
   },
 
+  async head() {
+    const r = await fetch("http://api.test/big?n=1000", { method: "HEAD" });
+    return { status: r.status, contentLength: r.headers.get("content-length"), body: await r.text() };
+  },
+
+  async trailers() {
+    const r = await fetch("http://api.test/chunked");
+    return { status: r.status, body: await r.text() };
+  },
+
+  async hopbyhop() {
+    const r = await fetch("http://api.test/", {
+      headers: { Connection: "keep-alive, X-Test", "X-Test": "should-stay", TE: "trailers", "Proxy-Authorization": "Basic eA==" },
+    });
+    return { status: r.status, body: await r.json() };
+  },
+
+  // Aborting mid-response fails the read that is waiting, and does not hang.
+  async abort() {
+    const ac = new AbortController();
+    const r = await fetch("http://api.test/sse", { signal: ac.signal });
+    const reader = r.body.getReader();
+    const first = dec.decode((await reader.read()).value);
+    ac.abort();
+    try {
+      await reader.read();
+      return { first, error: null };
+    } catch (e) {
+      return { first, error: String(e) };
+    }
+  },
+
+  // Giving up on a big body part way: the stream behind it must be closed.
+  async cancel() {
+    const r = await fetch(`http://api.test/big?n=${200 << 20}`);
+    const reader = r.body.getReader();
+    let got = 0;
+    while (got < 1 << 20) got += (await reader.read()).value.length;
+    await reader.cancel();
+    return { got };
+  },
+
+  // A reader slower than the wire: flow control holds the sender back the
+  // whole way, and every byte still arrives.
+  async slow(q) {
+    const n = Number(q.get("n") ?? 64 << 20);
+    const r = await fetch(`http://api.test/big?n=${n}`);
+    let total = 0;
+    let i = 0;
+    for await (const chunk of r.body) {
+      total += chunk.length;
+      if (++i % 64 === 0) await scheduler.wait(5);
+    }
+    return { total };
+  },
+
+  async slowget() {
+    const r = await fetch("http://api.test/slow");
+    return { status: r.status, body: await r.text() };
+  },
+
   async cookies() {
     const r = await fetch("http://api.test/cookies");
     return { cookies: r.headers.getSetCookie() };

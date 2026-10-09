@@ -244,3 +244,73 @@ func isNetworkError(e string) bool {
 	}
 	return false
 }
+
+// The rest of the HTTP surface, and what happens to the stream underneath when
+// the application stops early.
+func TestFetchEdges(t *testing.T) {
+	s := newStand(t)
+	s.addController()
+
+	t.Run("HEAD has no body, whatever its Content-Length says", func(t *testing.T) {
+		out := s.run("head")
+		if out["status"] != float64(200) || out["contentLength"] != "1000" || out["body"] != "" {
+			t.Errorf("got %v", out)
+		}
+	})
+	t.Run("chunked with trailers", func(t *testing.T) {
+		if out := s.run("trailers"); out["body"] != "part 0;part 1;part 2;part 3;part 4;" {
+			t.Errorf("got %v", out)
+		}
+	})
+	t.Run("hop-by-hop headers stay behind, the rest go on", func(t *testing.T) {
+		out := s.run("hopbyhop")
+		if get(out, "body", "x-test") != "should-stay" || get(out, "status") != float64(200) {
+			t.Errorf("got %v", out)
+		}
+	})
+	t.Run("abort mid-response fails the waiting read", func(t *testing.T) {
+		out := s.run("abort")
+		if out["first"] != "data: 0\n\n" || out["error"] == nil {
+			t.Errorf("got %v", out)
+		}
+	})
+	t.Run("a cancelled body closes its stream", func(t *testing.T) {
+		s.run("cancel")
+		s.waitFor("no open streams", func() bool { return s.status().Streams == 0 })
+	})
+	t.Run("a slow reader gets every byte", func(t *testing.T) {
+		if out := s.run("slow"); out["total"] != float64(64<<20) {
+			t.Errorf("got %v", out)
+		}
+	})
+	s.waitFor("no open streams at the end", func() bool { return s.status().Streams == 0 })
+}
+
+// More calls at once than yamux lets one end have unacknowledged (256): each
+// a separate request to the stand, each holding its stream for two seconds.
+func TestManyConcurrentCalls(t *testing.T) {
+	s := newStand(t)
+	s.addController()
+	const n = 300
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	bad := 0
+	for range n {
+		wg.Go(func() {
+			out := s.tryRun("slowget")
+			if out["body"] != "late" {
+				mu.Lock()
+				bad++
+				if bad <= 3 {
+					t.Errorf("got %v", out)
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if bad > 0 {
+		t.Fatalf("%d of %d calls failed", bad, n)
+	}
+	s.waitFor("no open streams", func() bool { return s.status().Streams == 0 })
+}

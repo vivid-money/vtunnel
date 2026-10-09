@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { HttpReader, encodeRequestHead, requestBodyLength } from "../src/http1.ts";
 import type { ByteReader } from "../src/frame.ts";
 import { readAll, str, text } from "./helpers.ts";

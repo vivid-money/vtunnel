@@ -1,7 +1,7 @@
 // The same cases the Go side's domain matching is tested with, so the two ends
 // of the tunnel read a name the same way.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { bestDomainMatch, canonicalHostPort, splitHostPort } from "../src/routes.ts";
 
 describe("bestDomainMatch", () => {

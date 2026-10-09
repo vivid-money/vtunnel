@@ -742,7 +742,14 @@ func (c *Client) wssTransport() (Dialer, error) {
 		sign := func(host, path string) http.Header {
 			return http.Header{"Authorization": {signUpgrade(key, host, path, time.Now())}}
 		}
-		return ws.DialStrict(ctx, c.url, sign, roots, defaultHandshakeTimeout)
+		conn, err := ws.DialStrict(ctx, c.url, sign, roots, defaultHandshakeTimeout)
+		if err != nil {
+			return nil, err
+		}
+		// The keepalive, outside the tunnel: a ping inside it would wake a
+		// hibernating server every interval, this one is answered without.
+		ws.Heartbeat(conn, c.keepAlive, 3*c.keepAlive)
+		return conn, nil
 	}, nil
 }
 
@@ -767,7 +774,8 @@ func (c *Client) dialOnce() (session.Session, error) {
 	}
 
 	go serveStreams(sess, c.handleStream)
-	if c.keepAlive > 0 {
+	// yamux-wss keeps alive in its transport instead; see wssTransport.
+	if c.keepAlive > 0 && c.protocol != ProtocolYamuxWSS {
 		go keepAliveLoop(sess, c.keepAlive)
 	}
 	return sess, nil

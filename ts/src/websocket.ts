@@ -3,10 +3,14 @@
 //
 // Only binary messages carry the session, and their boundaries mean nothing:
 // the Go end (internal/transport/ws) writes whatever its buffers hold as one
-// message each. A text message cannot come from a vtunnel peer, so it ends
+// message each. Text messages are the heartbeat ("vtunnel:ping", answered with
+// "vtunnel:pong"); any other text cannot come from a vtunnel peer, so it ends
 // the session rather than being guessed at.
 
 import { Session, YamuxError, type SessionOptions } from "./yamux.ts";
+
+export const PING_TEXT = "vtunnel:ping";
+export const PONG_TEXT = "vtunnel:pong";
 
 export function sessionOverWebSocket(ws: WebSocket, opts: SessionOptions = {}): Session {
   ws.binaryType = "arraybuffer";
@@ -25,7 +29,9 @@ export function sessionOverWebSocket(ws: WebSocket, opts: SessionOptions = {}): 
   );
   ws.addEventListener("message", (event) => {
     const data: unknown = event.data;
-    if (data instanceof ArrayBuffer) session.receive(new Uint8Array(data));
+    if (data === PING_TEXT) ws.send(PONG_TEXT);
+    else if (data === PONG_TEXT) return;
+    else if (data instanceof ArrayBuffer) session.receive(new Uint8Array(data));
     else if (ArrayBuffer.isView(data)) session.receive(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     else session.close(new YamuxError("protocol_error", "non-binary WebSocket message"));
   });

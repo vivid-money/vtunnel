@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -166,12 +167,24 @@ func (l *listener) Close() error {
 	return err
 }
 
+// The heartbeat is two text messages, outside the byte stream: tunnel data is
+// only ever binary, so text cannot be mistaken for it. A peer that is a
+// Cloudflare Durable Object answers PingText from the runtime without waking —
+// a ping inside the tunnel would wake it every time — and records when it last
+// did, which is how it tells a live client from a vanished one.
+const (
+	PingText = "vtunnel:ping"
+	PongText = "vtunnel:pong"
+)
+
 // Conn presents a *websocket.Conn as a net.Conn.
 //
 // Reads stream directly from the WebSocket message reader to avoid
-// allocations. Writes send each call as a single binary message.
+// allocations. Writes send each call as a single binary message. Text messages
+// are the heartbeat and never reach the reader: a ping is answered, a pong
+// noted, anything else dropped.
 func Conn(ws *websocket.Conn) net.Conn {
-	return &wsConn{Conn: ws}
+	return &wsConn{Conn: ws, done: make(chan struct{})}
 }
 
 type wsConn struct {
@@ -183,6 +196,10 @@ type wsConn struct {
 	// serializes its writes already, but that is its business, not a guarantee
 	// to build on.
 	writeMu sync.Mutex
+
+	lastPong  atomic.Int64 // unix nanoseconds
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func (c *wsConn) Read(dst []byte) (int, error) {
@@ -200,12 +217,69 @@ func (c *wsConn) Read(dst []byte) (int, error) {
 			}
 			continue
 		}
-		_, r, err := c.Conn.NextReader()
+		kind, r, err := c.Conn.NextReader()
 		if err != nil {
 			return 0, err
 		}
+		if kind == websocket.TextMessage {
+			c.heartbeatMessage(r)
+			continue
+		}
 		c.reader = r
 	}
+}
+
+func (c *wsConn) heartbeatMessage(r io.Reader) {
+	msg, err := io.ReadAll(io.LimitReader(r, 64))
+	if err != nil {
+		return
+	}
+	switch string(msg) {
+	case PingText:
+		c.writeMu.Lock()
+		c.Conn.WriteMessage(websocket.TextMessage, []byte(PongText))
+		c.writeMu.Unlock()
+	case PongText:
+		c.lastPong.Store(time.Now().UnixNano())
+	}
+}
+
+// Heartbeat pings conn, a Conn, every interval, and closes it if no pong has
+// arrived for timeout. It is for the dialling side of a link nothing else
+// watches; it stops when conn closes.
+func Heartbeat(conn net.Conn, interval, timeout time.Duration) {
+	c, ok := conn.(*wsConn)
+	if !ok || interval <= 0 {
+		return
+	}
+	c.lastPong.Store(time.Now().UnixNano())
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-c.done:
+				return
+			case <-t.C:
+			}
+			if time.Since(time.Unix(0, c.lastPong.Load())) > timeout {
+				c.Close()
+				return
+			}
+			c.writeMu.Lock()
+			err := c.Conn.WriteMessage(websocket.TextMessage, []byte(PingText))
+			c.writeMu.Unlock()
+			if err != nil {
+				c.Close()
+				return
+			}
+		}
+	}()
+}
+
+func (c *wsConn) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
+	return c.Conn.Close()
 }
 
 func (c *wsConn) Write(b []byte) (int, error) {

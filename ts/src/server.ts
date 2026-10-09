@@ -51,6 +51,20 @@ interface Peer {
   readonly ports: Map<number, string[]>;
   /** domain → port, the union of ports; rebuilt on every listen. */
   index: Map<string, number>;
+  readonly onRoutes: ((routes: [number, string[]][]) => void) | undefined;
+  readonly alive: (() => boolean) | undefined;
+}
+
+export interface AttachOptions {
+  /** Routes the controller declared before: for a session rebuilt over a connection that outlived its predecessor. */
+  routes?: Iterable<[number, string[]]>;
+  /** Called with the whole route table whenever the controller changes it, to keep it somewhere it survives. */
+  onRoutes?: (routes: [number, string[]][]) => void;
+  /**
+   * Whether the controller still answers, asked before a call is sent its
+   * way. A session it says is gone is closed rather than used.
+   */
+  alive?: () => boolean;
 }
 
 export interface Tunnel {
@@ -88,16 +102,31 @@ export class TunnelServer {
     return this.peers.size;
   }
 
+  /** How many streams are open across every session. */
+  get streams(): number {
+    let n = 0;
+    for (const peer of this.peers) n += peer.session.numStreams;
+    return n;
+  }
+
   /**
    * Serves a controller's session until it ends. label names it in logs and in
    * openTunnel's answer.
    */
-  async attach(session: Session, label = "controller"): Promise<void> {
+  async attach(session: Session, label = "controller", opts: AttachOptions = {}): Promise<void> {
     if (this.closed) {
       session.close();
       return;
     }
-    const peer: Peer = { session, label, ports: new Map(), index: new Map() };
+    const peer: Peer = {
+      session,
+      label,
+      ports: new Map(opts.routes ?? []),
+      index: new Map(),
+      onRoutes: opts.onRoutes,
+      alive: opts.alive,
+    };
+    reindex(peer);
     this.peers.add(peer);
     this.log(`${label}: connected (${this.peers.size} now)`);
     const keepAlive = this.keepAliveMs > 0 ? this.keepAlive(peer) : undefined;
@@ -151,6 +180,11 @@ export class TunnelServer {
     const out = [];
     for (const peer of this.peers) {
       if (peer.session.isClosed) continue;
+      if (peer.alive && !peer.alive()) {
+        this.log(`${peer.label}: not answering, closing its session`);
+        peer.session.close(new YamuxError("timeout", "controller stopped answering"));
+        continue;
+      }
       const pattern = bestDomainMatch(peer.index.keys(), hostPort);
       if (pattern !== null) out.push({ peer, port: peer.index.get(pattern)!, pattern });
     }
@@ -218,8 +252,8 @@ export class TunnelServer {
     if (port === 0) port = this.allocatePort(peer);
 
     peer.ports.set(port, [...domains]);
-    peer.index = new Map();
-    for (const [p, ds] of peer.ports) for (const d of ds) peer.index.set(d, p);
+    reindex(peer);
+    peer.onRoutes?.([...peer.ports]);
     this.log(`${peer.label}: routes for port ${port}: ${JSON.stringify(domains)}`);
     return { ok: true, port };
   }
@@ -281,6 +315,11 @@ export class TunnelServer {
       throw e;
     }
   }
+}
+
+function reindex(peer: Peer): void {
+  peer.index = new Map();
+  for (const [p, ds] of peer.ports) for (const d of ds) peer.index.set(d, p);
 }
 
 /** Resolves true if stop settled first. */

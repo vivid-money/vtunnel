@@ -55,6 +55,9 @@ const (
 	// [WithDialer] of its own, or without a key. The tunnel secret plays no
 	// part. Unlike the other protocols, whoever terminates the TLS — the CDN in
 	// front of the server — sees the tunnel in the clear.
+	//
+	// Its keepalive is a text message beside the tunnel rather than a stream in
+	// it, which a hibernating Durable Object answers without waking.
 	ProtocolYamuxWSS Protocol = "yamux-wss"
 )
 

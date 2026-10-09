@@ -1,7 +1,7 @@
 // The golden vector the Go tests check too, computed with Python's hmac rather
 // than by either implementation.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { parseUpgradeKey, signUpgrade, UpgradeVerifier } from "../src/upgrade.ts";
 
 const goldenKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";

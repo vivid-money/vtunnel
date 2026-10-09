@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { type ByteReader, encodeFrame, FrameError, FrameReader, MAX_FRAME, type StreamHeader, type StreamReply } from "../src/frame.ts";
 import { readAll, str, text } from "./helpers.ts";
 
