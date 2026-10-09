@@ -108,10 +108,12 @@ seen=$(grep -c "^/hello Bearer from-the-controller$" "$TMP/service.log" || true)
 [ "$seen" = "2" ] || fail "the service logged $seen requests with the credential, want 2"
 pass "the internal service received both requests, credential and all"
 
-headers=$(curl -sk -D - -o /dev/null "$URL/demo/fetch?url=https://example.com/")
-echo "$headers" | grep -q "^HTTP/[0-9.]* 502" || fail "a host no controller routes: $headers"
-echo "$headers" | grep -qi "^x-vtunnel-error: no-route" || fail "a host no controller routes: no x-vtunnel-error"
-pass "a host no controller routes gets 502 no-route from the tunnel object"
+# A host no controller routes: the example's gateway sends it straight out,
+# past the tunnel — so it arrives without the controller's credential.
+out=$(curl -sk "$URL/demo/fetch?url=http://127.0.0.1:$SERVICE_PORT/direct")
+echo "$out" | grep -q '"path": "/direct", "authorization": null' || fail "an unrouted host: $out"
+grep -q "^/direct None$" "$TMP/service.log" || fail "the service did not log the direct request"
+pass "a host no controller routes goes direct, past the tunnel and without the credential"
 
 code=$(curl -sk -o /dev/null -w '%{http_code}' -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "$URL/tunnel")

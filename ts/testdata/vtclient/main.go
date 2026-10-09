@@ -117,13 +117,11 @@ func main() {
 	must(routes.ForwardTo("tcpsink.test", tcpSink()))
 
 	must(client.Connect())
-	// The one policy a Durable Object can honour: nothing direct, ever. Any
-	// other is refused, and SetEgressPolicy reports that as an error.
-	if err := client.SetEgressPolicy(vtunnel.Policy{Default: vtunnel.ActionDeny}); err != nil {
-		log.Fatalf("policy: %v", err)
-	}
-	if err := client.SetEgressPolicy(vtunnel.Policy{Default: vtunnel.ActionAllow}); err == nil {
-		log.Fatal("policy: an allow-everything policy was accepted by an end with no direct egress")
+	// The TypeScript end decides nothing about direct egress — the code in
+	// front of it does — so it refuses every policy, and SetEgressPolicy has
+	// to say so rather than report one applied.
+	if err := client.SetEgressPolicy(vtunnel.Policy{Default: vtunnel.ActionDeny}); err == nil {
+		log.Fatal("policy: accepted by an end that enforces none")
 	}
 	// Set up and answered: the test may start pulling the connection about.
 	fmt.Println("ready")

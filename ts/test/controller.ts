@@ -2,7 +2,7 @@
 // vtunnel.Client with a MITM proxy — dialling a TunnelServer served here.
 
 import type { Subprocess } from "bun";
-import { Egress } from "../src/egress.ts";
+import { TunnelEgress } from "../src/egress.ts";
 import { TunnelServer } from "../src/server.ts";
 import type { SessionOptions } from "../src/yamux.ts";
 import { str, tick } from "./helpers.ts";
@@ -28,7 +28,7 @@ export function removeController(): void {
 
 export class Harness {
   readonly server = new TunnelServer({ log: () => {} });
-  readonly egress = new Egress(this.server);
+  readonly egress = new TunnelEgress(this.server);
   readonly ws: WSServer;
   readonly procs: Subprocess<"ignore", "pipe", "pipe">[] = [];
   private readonly stderr: Promise<string>[] = [];

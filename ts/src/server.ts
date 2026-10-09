@@ -13,8 +13,9 @@
 //     every controller pod holds its own session,
 //     each with its own routes, and a host is served by any session that
 //     routes it.
-//   - No direct egress, ever. A host no session routes is refused, never
-//     dialled. A policy is therefore accepted only if it asks for exactly that.
+//   - No egress policy. A host no session routes is refused here, never
+//     dialled; whether to send it anywhere else is for the code in front to
+//     decide, so a controller's policy is refused rather than claimed.
 
 import {
   encodeFrame,
@@ -258,22 +259,13 @@ export class TunnelServer {
     return { ok: true, port };
   }
 
-  // There is no direct egress here to govern: everything not routed through a
-  // tunnel is refused. A policy saying exactly that is applied — it is already
-  // true. Anything that allows a direct connection is refused, out loud,
-  // because a controller that got OK would believe the sandbox could reach what
-  // it cannot.
-  private handlePolicy(peer: Peer, h: StreamHeader): StreamReply {
-    const p = h.policy;
-    if (!p) return { ok: false, error: "policy message carried no policy" };
-    if (p.default !== "allow" && p.default !== "deny") {
-      return { ok: false, error: `unknown egress default "${p.default}" (want "allow" or "deny")` };
-    }
-    if (p.default === "allow" || (p.allow?.length ?? 0) > 0) {
-      this.log(`${peer.label}: refusing an egress policy that allows direct egress`);
-      return { ok: false, error: "this end has no direct egress: only default deny with no allow rules can be applied" };
-    }
-    return { ok: true, policyApplied: true };
+  // What reaches the internet directly is decided by the deployment — the
+  // code in front of this server — not by a policy a controller sends. So
+  // every policy is refused, out loud: a controller told "applied" would
+  // believe a rule held that nothing here enforces.
+  private handlePolicy(peer: Peer, _h: StreamHeader): StreamReply {
+    this.log(`${peer.label}: refusing an egress policy; direct egress is not decided here`);
+    return { ok: false, error: "egress outside the tunnel is decided by the deployment in front of this end, not by a policy" };
   }
 
   private allocatePort(peer: Peer): number {

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { Egress } from "../egress.ts";
+import { TunnelEgress } from "../egress.ts";
 import { TunnelServer } from "../server.ts";
 import { UpgradeVerifier } from "../upgrade.ts";
 import { PING_TEXT, PONG_TEXT } from "../websocket.ts";
@@ -57,7 +57,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
   /** How long a controller may go without pinging before it is taken for gone. */
   protected readonly staleMs: number = STALE_MS;
   protected readonly server = new TunnelServer({ keepAliveMs: 0 });
-  protected readonly egress = new Egress(this.server);
+  protected readonly egress = new TunnelEgress(this.server);
   private readonly sessions = new Map<string, Session>();
   private verifier: UpgradeVerifier | undefined;
 
@@ -145,12 +145,12 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     this.sessionOf(ws)?.transportClosed(error instanceof Error ? error : new YamuxError("session_shutdown", "WebSocket error"));
   }
 
-  /** Sends request through the tunnel. See Egress.fetch. */
+  /** Sends request through the tunnel. See TunnelEgress.fetch. */
   async egressFetch(request: Request): Promise<Response> {
     return this.egress.fetch(request);
   }
 
-  /** Pipes a socket's two halves to hostPort through the tunnel. See Egress.connect. */
+  /** Pipes a socket's two halves to hostPort through the tunnel. See TunnelEgress.connect. */
   async egressConnect(
     hostPort: string,
     readable: ReadableStream<Uint8Array>,

@@ -10,12 +10,15 @@
 // A deployment exports two classes from its Worker:
 //
 //	export class EgressTunnel extends VTunnelObject {}
-//	export class Egress extends EgressGateway<Env> {
+//	export class Gateway extends EgressGateway<Env> {
 //	  tunnel() { return this.env.EGRESS.getByName("egress"); }
 //	}
 //
-// and points a dynamic Worker's globalOutbound at ctx.exports.Egress(...).
+// and points a dynamic Worker's globalOutbound at ctx.exports.Gateway(...).
+// What happens to a host no controller routes is the deployment's to decide,
+// by overriding the gateway's fetch(); see EgressGateway.
 
 export { VTunnelObject } from "./object.ts";
 export { EgressGateway } from "./gateway.ts";
 export { checkUpgrade } from "./upgrade.ts";
+export { hostPortOf } from "../routes.ts";

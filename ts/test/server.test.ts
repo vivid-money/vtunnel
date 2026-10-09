@@ -68,19 +68,10 @@ describe("control streams", () => {
     expect((await request(session, { type: "listen", domains: "api.corp" })).ok).toBe(false);
   });
 
-  test("policy: only deny-everything-direct is applied", async () => {
+  test("policy: refused, whatever it says — direct egress is not decided here", async () => {
     const server = new TunnelServer(quiet);
     const { session } = controller(server, "a");
-    expect(await request(session, { type: "policy", policy: { default: "deny" } })).toEqual({
-      ok: true,
-      policyApplied: true,
-    });
-    for (const policy of [
-      { default: "allow" },
-      { default: "deny", allow: ["github.com"] },
-      { default: "sometimes" },
-      undefined,
-    ]) {
+    for (const policy of [{ default: "deny" }, { default: "allow" }, { default: "deny", allow: ["github.com"] }, undefined]) {
       const reply = await request(session, { type: "policy", policy });
       expect(reply.ok).toBe(false);
       expect(reply.policyApplied).toBeUndefined();

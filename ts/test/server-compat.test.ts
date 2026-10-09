@@ -2,7 +2,7 @@
 // controller declares its routes, sets a policy and reconnects as it would
 // against a sandbox, and its MITM proxy answers what comes down the tunnel.
 // The bytes on the tunnel are written by hand here; egress-compat.test.ts does
-// the same through Egress. Needs a Go toolchain.
+// the same through TunnelEgress. Needs a Go toolchain.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { Stream } from "../src/yamux.ts";
@@ -62,7 +62,7 @@ describe("TunnelServer against vtunnel.Client", () => {
     expect(body(inner)).toMatchObject({ who: "handler", method: "POST", host: "api.test", uri: "/things" });
   });
 
-  test("the policy got through: the controller is still alive", async () => {
+  test("a policy is refused, and the controller carries on", async () => {
     h = await new Harness().start();
     await tick(200);
     expect(h.procs[0]!.exitCode).toBeNull();

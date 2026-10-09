@@ -1,10 +1,10 @@
 // The stand's one Worker, laid out as a deployment would lay it out:
 //
 //   - EgressTunnel: the Durable Object holding the tunnel (VTunnelObject).
-//   - Egress: the gateway a dynamic Worker's globalOutbound points at.
+//   - Gateway: the gateway a dynamic Worker's globalOutbound points at.
 //   - default: the public face. /tunnel checks a controller's signed
 //     WebSocket upgrade (yamux-wss) and passes it to the object; /run loads
-//     the test application as a dynamic Worker, egressing through Egress, and
+//     the test application as a dynamic Worker, egressing through Gateway, and
 //     has it run one case; /status reports.
 //
 // Built by the Go test with bun build, cloudflare:* left external.
@@ -33,7 +33,7 @@ export class EgressTunnel extends VTunnelObject<Env> {
   }
 }
 
-export class Egress extends EgressGateway<Env, { app: string }> {
+export class Gateway extends EgressGateway<Env, { app: string }> {
   protected tunnel() {
     return this.env.EGRESS.getByName("egress");
   }
@@ -63,7 +63,7 @@ export default {
           compatibilityDate: "2026-10-01",
           mainModule: "app.js",
           modules: { "app.js": appSource as string },
-          globalOutbound: ctx.exports.Egress({ props: { app } }),
+          globalOutbound: ctx.exports.Gateway({ props: { app } }),
         }));
         return worker.getEntrypoint().fetch(request);
       }

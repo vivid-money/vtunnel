@@ -1,6 +1,6 @@
 // The TypeScript sandbox side under load: cmd/bench, with the server written in
 // TypeScript. A Go controller (testdata/vtclient — vtunnel.Client and its MITM
-// proxy) dials a TunnelServer running here under Bun; Egress drives traffic
+// proxy) dials a TunnelServer running here under Bun; TunnelEgress drives traffic
 // through it the way a gateway would.
 //
 //	bun bench/bench.ts [-size 256MB] [-c 1] [-n 2000] [-mode all] [-window 1MB] [-go]

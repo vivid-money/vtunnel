@@ -2,12 +2,21 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { VTunnelObject } from "./object.ts";
 
 /** The part of a VTunnelObject stub a gateway calls. */
-export type TunnelStub = Pick<DurableObjectStub<VTunnelObject>, "egressFetch" | "egressConnect">;
+export type TunnelStub = Pick<DurableObjectStub<VTunnelObject>, "egressFetch" | "egressConnect" | "routes">;
 
 /**
  * EgressGateway is what a dynamic Worker's globalOutbound points at: every
  * fetch() and connect() it makes arrives here instead of at the network, and
  * goes on to the tunnel object. tunnel() says which object.
+ *
+ * It sends everything to the tunnel, and a host no controller routes gets the
+ * object's answer to that: 502, x-vtunnel-error: no-route. Anything else is
+ * a decision for the deployment, made in an override:
+ *
+ *	override async fetch(request: Request) {
+ *	  if (await this.tunnel().routes(hostPortOf(request.url))) return super.fetch(request);
+ *	  return fetch(request); // or refuse, or log
+ *	}
  *
  * A fetch arrives as a parsed Request, before any TLS — the runtime has not
  * dialled anything yet — so it crosses the tunnel as HTTP and the controller

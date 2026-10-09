@@ -26,8 +26,10 @@ Routes:
 | Route | |
 |---|---|
 | `/tunnel` | where controllers connect; anything but a signed upgrade gets 401 |
-| `/demo/fetch` | this Worker fetching `http://api.internal/hello` through the tunnel; `?url=` for another — a host no controller routes gets a 502 |
-| `/demo/app` | a Dynamic Worker doing the same — its only network is the tunnel |
+| `/demo/fetch` | this Worker fetching `http://api.internal/hello` through the gateway; `?url=` for another |
+| `/demo/app` | a Dynamic Worker doing the same — its only network is the gateway |
+
+The gateway sends hosts a controller routes through the tunnel and, in this example, everything else straight to the internet. That second half is the deployment's choice, made in the gateway's `fetch()` — see below.
 
 ## Try it locally
 
@@ -35,7 +37,7 @@ Routes:
 ./example/cloudflare/test.sh
 ```
 
-It starts `wrangler dev` over HTTPS with a throwaway certificate, a stand-in internal service, and a controller, then checks that both demo routes reach the service with the credential the controller injected, that the service really received those requests, that a host no controller routes gets a 502 without leaving, and that an unsigned upgrade is refused. Needs Node, Go, Python 3 and openssl.
+It starts `wrangler dev` over HTTPS with a throwaway certificate, a stand-in internal service, and a controller, then checks that both demo routes reach the service with the credential the controller injected, that the service really received those requests, that a host no controller routes goes direct without it, and that an unsigned upgrade is refused. Needs Node, Go, Python 3 and openssl.
 
 ## Deploy
 
@@ -86,16 +88,27 @@ client.Connect()
 The library is `ts/` (`@vivid-money/vtunnel`). Export the two classes, bind the object, and point whatever should use the tunnel at the gateway:
 
 ```ts
-import { checkUpgrade, EgressGateway, VTunnelObject } from "@vivid-money/vtunnel/cloudflare";
+import { checkUpgrade, EgressGateway, hostPortOf, VTunnelObject } from "@vivid-money/vtunnel/cloudflare";
 
 export class EgressTunnel extends VTunnelObject<Env> {}
-export class Egress extends EgressGateway<Env> {
+export class Gateway extends EgressGateway<Env> {
   protected tunnel() { return this.env.EGRESS.getByName("egress"); }
 }
 
-// a Dynamic Worker whose network is the tunnel:
-env.LOADER.get(id, () => ({ ..., globalOutbound: ctx.exports.Egress({}) }));
+// a Dynamic Worker whose network is the gateway:
+env.LOADER.get(id, () => ({ ..., globalOutbound: ctx.exports.Gateway({}) }));
 ```
+
+Left as it is, the gateway sends everything to the tunnel, and a host no controller routes gets a 502 (`x-vtunnel-error: no-route`) — nothing leaves. Anything else is a few lines in the gateway:
+
+```ts
+override async fetch(request: Request) {
+  if (await this.tunnel().routes(hostPortOf(request.url))) return super.fetch(request);
+  return fetch(request);                                    // or refuse, or log
+}
+```
+
+`connect()` is the same with `connect(socket)`: the destination is `(await socket.opened).localAddress`.
 
 The `/tunnel` route must check the signature before passing the upgrade on — `checkUpgrade`, as in `src/index.ts`. The object checks it again and refuses replays.
 
@@ -104,7 +117,7 @@ The `/tunnel` route must check the signature before passing the upgrade on — `
 - **Several controller pods** connect to the same object at once. Each declares its routes; calls go round-robin among the pods that route the host. A pod that dies is dropped — at once if its connection closes, within 90 seconds of silence if it vanishes without closing (the object needs the client's keepalive for that: leave `-keepalive` at its default).
 - **Idle costs nothing.** The object hibernates while no call is in flight; controllers stay connected and their keepalive is answered without waking it.
 - **A deploy disconnects every controller.** They reconnect on their own; calls in flight at that moment fail as network errors.
-- **Hosts without a route** get a 502 made by the object (`x-vtunnel-error: no-route`); nothing is sent to the internet.
+- **Hosts without a route** are the gateway's to decide (above). Egress policies a controller sends (`-default-egress`, `-allow-out`, `-deny-out`) are refused here, since nothing on this side would enforce them; leave them off controllers of a Durable Object.
 - **Rotating the upgrade key** means changing it in both places; controllers on the old key are refused until they have the new one.
 - **Whoever terminates the `wss://` — Cloudflare — sees the tunnel in the clear.** Credentials are injected on the controller, after the tunnel, so they never cross it; request and response bodies do.
 

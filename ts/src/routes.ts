@@ -104,6 +104,16 @@ export function splitHostPort(hostPort: string): [string, string] | null {
   return [host, port];
 }
 
+/**
+ * The host and port a URL reaches, as route tables and routes() take them:
+ * "api.corp:443" for https://api.corp/, the port a scheme implies filled in.
+ */
+export function hostPortOf(url: string | URL): string {
+  const u = typeof url === "string" ? new URL(url) : url;
+  const host = u.hostname.startsWith("[") && u.hostname.endsWith("]") ? u.hostname.slice(1, -1) : u.hostname;
+  return joinHostPort(host, u.port || (u.protocol === "https:" || u.protocol === "wss:" ? "443" : "80"));
+}
+
 export function joinHostPort(host: string, port: string): string {
   return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
 }

@@ -16,10 +16,10 @@
 
 import { coalesce } from "./bytes.ts";
 import { HttpReader, encodeRequestHead, isNullBodyStatus, requestBodyLength, responseHeaders, writeRequestBody } from "./http1.ts";
-import { joinHostPort } from "./routes.ts";
+import { hostPortOf } from "./routes.ts";
 import { NoRouteError, type TunnelServer } from "./server.ts";
 
-export interface EgressOptions {
+export interface TunnelEgressOptions {
   /** How long to wait for a response head once the request is sent. Default 60 s. 0 disables. */
   responseHeaderTimeoutMs?: number;
 }
@@ -35,12 +35,12 @@ export interface Duplex {
   writable: WritableStream<Uint8Array>;
 }
 
-export class Egress {
+export class TunnelEgress {
   private readonly responseHeaderTimeoutMs: number;
 
   constructor(
     private readonly server: TunnelServer,
-    opts: EgressOptions = {},
+    opts: TunnelEgressOptions = {},
   ) {
     this.responseHeaderTimeoutMs = opts.responseHeaderTimeoutMs ?? 60_000;
   }
@@ -59,7 +59,7 @@ export class Egress {
       // Needs a 101 and a WebSocket handed back, which is its own path.
       return refusal(501, "vtunnel: protocol upgrades are not supported yet");
     }
-    const hostPort = joinHostPort(stripBrackets(url.hostname), url.port || (url.protocol === "https:" ? "443" : "80"));
+    const hostPort = hostPortOf(url);
 
     let tunnel;
     try {
@@ -158,10 +158,6 @@ function refusal(status: number, message: string): Response {
     status,
     headers: { "content-type": "text/plain; charset=utf-8", "x-vtunnel-error": status === 502 ? "no-route" : "unsupported" },
   });
-}
-
-function stripBrackets(host: string): string {
-  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }
 
 async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {

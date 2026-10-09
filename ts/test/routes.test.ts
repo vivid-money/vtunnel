@@ -2,7 +2,7 @@
 // of the tunnel read a name the same way.
 
 import { describe, expect, test } from "vitest";
-import { bestDomainMatch, canonicalHostPort, splitHostPort } from "../src/routes.ts";
+import { bestDomainMatch, canonicalHostPort, hostPortOf, splitHostPort } from "../src/routes.ts";
 
 describe("bestDomainMatch", () => {
   test("case-insensitive", () => {
@@ -104,6 +104,16 @@ describe("bestDomainMatch", () => {
     expect(bestDomainMatch(patterns, "api.corp:0")).toBe("api.corp:0");
     expect(bestDomainMatch(patterns, "API.corp:0")).toBeNull();
     expect(bestDomainMatch(patterns, "API.corp:99999")).toBeNull();
+  });
+});
+
+describe("hostPortOf", () => {
+  test("the port a scheme implies, brackets dropped", () => {
+    expect(hostPortOf("https://api.corp/x")).toBe("api.corp:443");
+    expect(hostPortOf("http://api.corp/x")).toBe("api.corp:80");
+    expect(hostPortOf("http://api.corp:8080/")).toBe("api.corp:8080");
+    expect(hostPortOf(new URL("https://[2001:db8::1]/"))).toBe("[2001:db8::1]:443");
+    expect(hostPortOf("wss://edge.example/tunnel")).toBe("edge.example:443");
   });
 });
 

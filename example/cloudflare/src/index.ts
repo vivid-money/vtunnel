@@ -2,11 +2,11 @@
 // through vtunnel controllers that dial in from it.
 //
 //   /tunnel       controllers connect here (protocol yamux-wss, signed upgrade)
-//   /demo/fetch   this Worker fetching through the tunnel (?url=, default
+//   /demo/fetch   this Worker fetching through the gateway (?url=, default
 //                 http://api.internal/hello)
 //   /demo/app     a Dynamic Worker whose whole network is the tunnel
 
-import { checkUpgrade, EgressGateway, VTunnelObject } from "@vivid-money/vtunnel/cloudflare";
+import { checkUpgrade, EgressGateway, hostPortOf, VTunnelObject } from "@vivid-money/vtunnel/cloudflare";
 
 interface Env {
   EGRESS: DurableObjectNamespace<EgressTunnel>;
@@ -18,18 +18,24 @@ interface Env {
 export class EgressTunnel extends VTunnelObject<Env> {}
 
 /**
- * The gateway: anything whose network should be the tunnel calls this. A
- * Dynamic Worker gets it as its globalOutbound; this Worker can call it too.
+ * The gateway: a Dynamic Worker gets it as its globalOutbound, and this
+ * Worker can call it too. Hosts a controller routes go through the tunnel;
+ * this example sends everything else straight to the internet. Leave fetch()
+ * alone and they get a 502 instead, or decide anything else here.
  */
-export class Egress extends EgressGateway<Env> {
+export class Gateway extends EgressGateway<Env> {
   protected tunnel() {
     return this.env.EGRESS.getByName("egress");
   }
+
+  override async fetch(request: Request): Promise<Response> {
+    if (await this.tunnel().routes(hostPortOf(request.url))) return super.fetch(request);
+    return fetch(request);
+  }
 }
 
-// The code a Dynamic Worker runs in the demo. Its fetch() cannot reach the
-// internet: globalOutbound sends it to the gateway, and the gateway to the
-// tunnel.
+// The code a Dynamic Worker runs in the demo. Its fetch() goes to the gateway,
+// whatever the URL: globalOutbound leaves it no other way out.
 const demoApp = `
 export default {
   async fetch() {
@@ -52,16 +58,14 @@ export default {
       }
 
       case "/demo/fetch":
-        // Any URL, but only hosts a controller routes are reached; the rest
-        // get a 502 from the tunnel object, and nothing leaves Cloudflare.
-        return ctx.exports.Egress({}).fetch(url.searchParams.get("url") ?? "http://api.internal/hello");
+        return ctx.exports.Gateway({}).fetch(url.searchParams.get("url") ?? "http://api.internal/hello");
 
       case "/demo/app": {
         const worker = env.LOADER.get("demo-app", () => ({
           compatibilityDate: "2026-10-01",
           mainModule: "app.js",
           modules: { "app.js": demoApp },
-          globalOutbound: ctx.exports.Egress({}),
+          globalOutbound: ctx.exports.Gateway({}),
         }));
         return worker.getEntrypoint().fetch(request);
       }

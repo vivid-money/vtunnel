@@ -1,4 +1,4 @@
-// Egress against a real controller (testdata/vtclient): fetch() and connect()
+// TunnelEgress against a real controller (testdata/vtclient): fetch() and connect()
 // as code in the isolate would call them, answered by vtunnel's MITM proxy and
 // the upstreams behind it. Needs a Go toolchain.
 
