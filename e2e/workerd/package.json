@@ -1,0 +1,8 @@
+{
+  "name": "vtunnel-workerd-stand",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "workerd": "1.20261009.1"
+  }
+}
