@@ -26,7 +26,7 @@ Routes:
 | Route | |
 |---|---|
 | `/tunnel` | where controllers connect; anything but a signed upgrade gets 401 |
-| `/demo/fetch` | this Worker fetching `http://api.internal/hello` through the tunnel |
+| `/demo/fetch` | this Worker fetching `http://api.internal/hello` through the tunnel; `?url=` for another — a host no controller routes gets a 502 |
 | `/demo/app` | a Dynamic Worker doing the same — its only network is the tunnel |
 
 ## Try it locally
@@ -35,7 +35,7 @@ Routes:
 ./example/cloudflare/test.sh
 ```
 
-It starts `wrangler dev` over HTTPS with a throwaway certificate, a stand-in internal service, and a controller, then checks both demo routes and that an unsigned upgrade is refused. Needs Node, Go, Python 3 and openssl.
+It starts `wrangler dev` over HTTPS with a throwaway certificate, a stand-in internal service, and a controller, then checks that both demo routes reach the service with the credential the controller injected, that the service really received those requests, that a host no controller routes gets a 502 without leaving, and that an unsigned upgrade is refused. Needs Node, Go, Python 3 and openssl.
 
 ## Deploy
 

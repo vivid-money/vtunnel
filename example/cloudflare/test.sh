@@ -54,10 +54,11 @@ log "building the client (test build)..."
 (cd "$ROOT" && go build -tags vtunnel_testing -o "$TMP/vtunnel" ./cmd/vtunnel)
 
 log "starting the internal service on :$SERVICE_PORT..."
-python3 - "$SERVICE_PORT" > /dev/null 2>&1 <<'PY' &
+python3 - "$SERVICE_PORT" > "$TMP/service.log" 2>&1 <<'PY' &
 import http.server, json, sys
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        print(f"{self.path} {self.headers.get('Authorization')}", flush=True)
         body = json.dumps({"service": "api.internal", "path": self.path,
                            "authorization": self.headers.get("Authorization")}).encode()
         self.send_response(200)
@@ -100,6 +101,17 @@ check() {
 }
 check /demo/fetch
 check /demo/app
+
+# The service's own log, not just the answer: two requests arrived, each with
+# the credential.
+seen=$(grep -c "^/hello Bearer from-the-controller$" "$TMP/service.log" || true)
+[ "$seen" = "2" ] || fail "the service logged $seen requests with the credential, want 2"
+pass "the internal service received both requests, credential and all"
+
+headers=$(curl -sk -D - -o /dev/null "$URL/demo/fetch?url=https://example.com/")
+echo "$headers" | grep -q "^HTTP/[0-9.]* 502" || fail "a host no controller routes: $headers"
+echo "$headers" | grep -qi "^x-vtunnel-error: no-route" || fail "a host no controller routes: no x-vtunnel-error"
+pass "a host no controller routes gets 502 no-route from the tunnel object"
 
 code=$(curl -sk -o /dev/null -w '%{http_code}' -H "Connection: Upgrade" -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "$URL/tunnel")

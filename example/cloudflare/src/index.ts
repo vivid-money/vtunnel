@@ -2,7 +2,8 @@
 // through vtunnel controllers that dial in from it.
 //
 //   /tunnel       controllers connect here (protocol yamux-wss, signed upgrade)
-//   /demo/fetch   this Worker fetching through the tunnel
+//   /demo/fetch   this Worker fetching through the tunnel (?url=, default
+//                 http://api.internal/hello)
 //   /demo/app     a Dynamic Worker whose whole network is the tunnel
 
 import { checkUpgrade, EgressGateway, VTunnelObject } from "@vivid-money/vtunnel/cloudflare";
@@ -51,7 +52,9 @@ export default {
       }
 
       case "/demo/fetch":
-        return ctx.exports.Egress({}).fetch("http://api.internal/hello");
+        // Any URL, but only hosts a controller routes are reached; the rest
+        // get a 502 from the tunnel object, and nothing leaves Cloudflare.
+        return ctx.exports.Egress({}).fetch(url.searchParams.get("url") ?? "http://api.internal/hello");
 
       case "/demo/app": {
         const worker = env.LOADER.get("demo-app", () => ({
