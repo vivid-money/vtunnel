@@ -392,6 +392,7 @@ func runClient(args []string) {
 	mitmCAFile := fs.String("mitm-ca", os.Getenv("VTUNNEL_MITM_CA"), "PEM file with CA cert+key for HTTPS MITM (created if missing); unset = no interception")
 	protocol := fs.String("protocol", os.Getenv("VTUNNEL_PROTOCOL"), "Session protocol: ssh (default), yamux, yamux-insecure or yamux-wss; must match the sandbox")
 	upgradeKey := fs.String("upgrade-key", os.Getenv("VTUNNEL_UPGRADE_KEY"), "Key the yamux-wss upgrade is signed with, or @/path to a file")
+	testRoots := testRootsFlag(fs)
 	egress := egressFlags(fs)
 	var forwards forwardList
 	fs.Var(&forwards, "forward", "Port forward: remotePort=localAddr (repeatable)")
@@ -408,6 +409,7 @@ func runClient(args []string) {
 	}
 
 	opts := []vtunnel.Option{vtunnel.WithProtocol(parseProtocol(*protocol, true))}
+	opts = append(opts, testRoots()...)
 	if *upgradeKey != "" {
 		opts = append(opts, vtunnel.WithUpgradeKey(readSecret(*upgradeKey)))
 	}

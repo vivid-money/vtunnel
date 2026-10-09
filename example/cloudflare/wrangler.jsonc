@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vtunnel-egress",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+
+  // The tunnel: one Durable Object, which every controller dials into.
+  "durable_objects": {
+    "bindings": [{ "name": "EGRESS", "class_name": "EgressTunnel" }]
+  },
+  "exports": {
+    "EgressTunnel": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Dynamic Workers, for the /demo/app route. Not needed by the tunnel itself.
+  "worker_loaders": [{ "binding": "LOADER" }],
+
+  // The key controllers sign their upgrade with: wrangler secret put
+  // VTUNNEL_UPGRADE_KEY, or .dev.vars for wrangler dev.
+  "secrets": { "required": ["VTUNNEL_UPGRADE_KEY"] }
+}
