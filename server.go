@@ -169,7 +169,10 @@ func NewServer(opts ...ServerOption) *Server {
 		_ = s.egress.SetPolicy(s.egressPolicy)
 	}
 
-	if s.protocol.insecure() {
+	if s.protocol == ProtocolYamuxWSS {
+		log.Printf("[vtunnel-server] Protocol %q: the session authenticates nothing. Terminate wss:// "+
+			"in front and check every upgrade with an UpgradeVerifier before handing it here.", s.protocol)
+	} else if s.protocol.insecure() {
 		log.Printf("[vtunnel-server] WARNING: protocol %q has no encryption and no authentication. "+
 			"Any secret configured is ignored, and anyone who can reach this port owns the tunnel. "+
 			"It is here to be measured against, not to be run.", s.protocol)

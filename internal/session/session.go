@@ -60,6 +60,15 @@ const (
 	// measure what the cryptography costs, by being the same code path without
 	// it.
 	KindYamuxInsecure Kind = "yamux-insecure"
+
+	// KindYamuxWSS is yamux with nothing underneath it, like KindYamuxInsecure
+	// — the same bytes on the wire — but meant to be run. It departs from the
+	// rule this package otherwise keeps, that the transport contributes nothing
+	// to security: here the transport is everything. It exists for a peer that
+	// cannot be a TLS server over a stream (a Cloudflare Durable Object), and is
+	// safe only over wss:// with the server's certificate verified and the
+	// upgrade signed, which the dialling side enforces before this runs.
+	KindYamuxWSS Kind = "yamux-wss"
 )
 
 // Config is everything a backend needs that is not the connection itself.
@@ -103,7 +112,7 @@ func Dial(kind Kind, conn net.Conn, cfg Config) (Session, error) {
 				return nil, err
 			}
 			return dialYamux(sec, cfg)
-		case KindYamuxInsecure:
+		case KindYamuxInsecure, KindYamuxWSS:
 			return dialYamux(c, cfg)
 		default:
 			return nil, fmt.Errorf("unknown session kind %q", kind)
@@ -125,7 +134,7 @@ func Serve(kind Kind, conn net.Conn, cfg Config) (Session, error) {
 				return nil, err
 			}
 			return serveYamux(sec, cfg)
-		case KindYamuxInsecure:
+		case KindYamuxInsecure, KindYamuxWSS:
 			return serveYamux(c, cfg)
 		default:
 			return nil, fmt.Errorf("unknown session kind %q", kind)

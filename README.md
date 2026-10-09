@@ -281,6 +281,7 @@ What multiplexes the streams and authenticates the two ends. There is no negotia
 | `ssh` | the default, `golang.org/x/crypto/ssh` | fixed at 2 MB |
 | `yamux` | yamux over TLS 1.3, both ends' keys pinned to the secret | 8 MB, [tunable](https://pkg.go.dev/github.com/vivid-money/vtunnel#WithStreamWindow) |
 | `yamux-insecure` | the same with the TLS removed | 8 MB, tunable |
+| `yamux-wss` | yamux straight over `wss://`, for a Cloudflare Durable Object; client only | 8 MB, tunable |
 
 **The window is the reason there is a second one.** A stream cannot exceed window/RTT whatever the bandwidth, so `x/crypto/ssh`'s hard-coded 2 MB caps one connection at 40 MB/s against a sandbox 50 ms away — on any link, however fat. `yamux` makes that number a setting and defaults it to 8 MB. None of this shows up on loopback: it matters when the sandbox is far away, not when it is a container on the same host.
 
@@ -289,6 +290,8 @@ Allocation is a separate win and applies everywhere: `ssh` allocates more bytes 
 Measure your own link with `go run ./cmd/bench -latency 50ms -window … -mode direct`.
 
 **`yamux-insecure` has no encryption and no authentication**, and ignores the secret even when one is set. Whoever reaches the port owns the tunnel, and that includes every [`Client.Listen`](https://pkg.go.dev/github.com/vivid-money/vtunnel#Client.Listen) target and the credential-injecting proxy behind it. It exists so the cost of the cryptography can be measured against the same code path without it — and the measurement says that cost is nothing once there is any latency to speak of, the two being indistinguishable at 50 ms. Both ends log a warning naming it, every time they start.
+
+**`yamux-wss` is for a server that cannot be a TLS server over a stream** — the TypeScript sandbox side in [`ts/`](ts/), running in a Cloudflare Durable Object. On the wire it is `yamux-insecure`; its security is all in the transport, and the client enforces every part of it before dialling: `wss://` only, the server's certificate checked against the system roots and the URL's host with nothing to configure that away, and the WebSocket upgrade signed with an upgrade key ([`WithUpgradeKey`](https://pkg.go.dev/github.com/vivid-money/vtunnel#WithUpgradeKey), `-upgrade-key`) — bound to host and path, valid for a minute, good once. The tunnel secret plays no part: the upgrade key is its own random value (`openssl rand -base64 32`), held by the client and by the Durable Object as `VTUNNEL_UPGRADE_KEY`. Whoever terminates that TLS — Cloudflare's edge — sees the tunnel in the clear. A Go endpoint can serve it too, checking each upgrade with [`UpgradeVerifier`](https://pkg.go.dev/github.com/vivid-money/vtunnel#UpgradeVerifier) before accepting it; `vtunnel server` cannot, and refuses it.
 
 ## Raw port forwards
 
@@ -667,7 +670,8 @@ Nothing dials in, no client exists, and the rules apply from the first connectio
 |------|-------------|---------|
 | `-server` | Tunnel URL; the scheme picks the transport (required) | — |
 | `-secret` | Shared tunnel secret, or `@/path` to a file | `$VTUNNEL_SECRET` |
-| `-protocol` | Session protocol: `ssh`, `yamux`, `yamux-insecure`. Must match the sandbox | `$VTUNNEL_PROTOCOL`, else `ssh` |
+| `-protocol` | Session protocol: `ssh`, `yamux`, `yamux-insecure`, `yamux-wss`. Must match the sandbox | `$VTUNNEL_PROTOCOL`, else `ssh` |
+| `-upgrade-key` | Key a `yamux-wss` upgrade is signed with, or `@/path` to a file | `$VTUNNEL_UPGRADE_KEY` |
 | `-mitm-ca` | PEM with CA cert+key for HTTPS MITM; created if missing. Without it TLS is piped through untouched and `-H` is rejected | `$VTUNNEL_MITM_CA` (unset = no interception) |
 | `-forward` | Forward mapping (repeatable, at least one required) | — |
 | `-H` / `-header` | Header injected into requests for the preceding `-forward` (repeatable) | — |

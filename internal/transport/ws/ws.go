@@ -14,9 +14,13 @@ package ws
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -55,6 +59,35 @@ func Dial(ctx context.Context, url string, headers http.Header, handshakeTimeout
 		Proxy: http.ProxyFromEnvironment,
 	}
 	wsConn, _, err := dialer.DialContext(ctx, url, headers)
+	if err != nil {
+		return nil, err
+	}
+	return Conn(wsConn), nil
+}
+
+// DialStrict opens a wss:// WebSocket for a protocol whose security rests on
+// it: the server certificate is verified against roots (nil means the system
+// pool) and the URL's host, no proxy is taken from the environment — an
+// HTTPS_PROXY must not slip in between unannounced — and redirects are not
+// followed (gorilla never does). headers is called on every dial, so a
+// signature in it can be fresh.
+func DialStrict(ctx context.Context, rawURL string, headers func(host, path string) http.Header,
+	roots *x509.CertPool, handshakeTimeout time.Duration) (net.Conn, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "wss" {
+		return nil, fmt.Errorf("refusing %q: only wss:// carries this protocol", rawURL)
+	}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: handshakeTimeout,
+		ReadBufferSize:   BufferSize,
+		WriteBufferSize:  BufferSize,
+		Proxy:            nil,
+		TLSClientConfig:  &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: u.Hostname()},
+	}
+	wsConn, _, err := dialer.DialContext(ctx, rawURL, headers(u.Host, u.RequestURI()))
 	if err != nil {
 		return nil, err
 	}
