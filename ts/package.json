@@ -1,8 +1,13 @@
 {
   "name": "@vivid-money/vtunnel",
   "version": "0.0.0",
-  "private": true,
   "description": "The sandbox side of vtunnel in TypeScript, for any runtime with Web Streams; Cloudflare bindings under ./cloudflare",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vivid-money/vtunnel.git",
+    "directory": "ts"
+  },
+  "license": "UNLICENSED",
   "type": "module",
   "exports": {
     "./yamux": "./src/yamux.ts",
@@ -14,6 +19,12 @@
     "./egress": "./src/egress.ts",
     "./cloudflare": "./src/cloudflare/index.ts",
     "./upgrade": "./src/upgrade.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "test": "bun test",
