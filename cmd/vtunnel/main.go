@@ -105,9 +105,16 @@ Client flags:
                     Any hard-to-guess string, e.g. openssl rand -base64 32;
                     @/path reads it from a file. [$VTUNNEL_SECRET]
   -protocol string  Session protocol, the same value the sandbox is given:
-                    ssh (default), yamux, or yamux-insecure — the last of
-                    which has no encryption and no authentication, and is
-                    there to be measured against. [$VTUNNEL_PROTOCOL]
+                    ssh (default), yamux, or yamux-insecure — which has no
+                    encryption and no authentication, and is there to be
+                    measured against — or yamux-wss, for a Cloudflare
+                    Durable Object: wss:// only, the upgrade signed with
+                    -upgrade-key, no -secret. [$VTUNNEL_PROTOCOL]
+  -upgrade-key string
+                    Key a yamux-wss upgrade is signed with, the value the
+                    Durable Object has as VTUNNEL_UPGRADE_KEY: base64, 32
+                    bytes, e.g. openssl rand -base64 32; @/path reads it from
+                    a file. [$VTUNNEL_UPGRADE_KEY]
   -mitm-ca string   PEM file with CA cert+key for HTTPS MITM [$VTUNNEL_MITM_CA]
                     Created if missing. Without it TLS is piped through
                     untouched and -H cannot be used.
@@ -315,7 +322,7 @@ func runServer(args []string) {
 		log.Fatalf("[vtunnel] bad -listen %q: want ws://:3001/ or tcp://:3001", *listen)
 	}
 
-	opts := []vtunnel.ServerOption{vtunnel.WithServerProtocol(parseProtocol(*protocol))}
+	opts := []vtunnel.ServerOption{vtunnel.WithServerProtocol(parseProtocol(*protocol, false))}
 	if *secret != "" {
 		opts = append(opts, vtunnel.WithServerSecret(readSecret(*secret)))
 		log.Println("[vtunnel] Tunnel authentication enabled")
@@ -383,7 +390,9 @@ func runClient(args []string) {
 	server := fs.String("server", "", "WebSocket server URL")
 	key := fs.String("secret", os.Getenv("VTUNNEL_SECRET"), "Shared tunnel secret, or @/path to a file")
 	mitmCAFile := fs.String("mitm-ca", os.Getenv("VTUNNEL_MITM_CA"), "PEM file with CA cert+key for HTTPS MITM (created if missing); unset = no interception")
-	protocol := fs.String("protocol", os.Getenv("VTUNNEL_PROTOCOL"), "Session protocol: ssh (default), yamux, or yamux-insecure; must match the sandbox")
+	protocol := fs.String("protocol", os.Getenv("VTUNNEL_PROTOCOL"), "Session protocol: ssh (default), yamux, yamux-insecure or yamux-wss; must match the sandbox")
+	upgradeKey := fs.String("upgrade-key", os.Getenv("VTUNNEL_UPGRADE_KEY"), "Key the yamux-wss upgrade is signed with, or @/path to a file")
+	testRoots := testRootsFlag(fs)
 	egress := egressFlags(fs)
 	var forwards forwardList
 	fs.Var(&forwards, "forward", "Port forward: remotePort=localAddr (repeatable)")
@@ -399,7 +408,11 @@ func runClient(args []string) {
 		log.Fatal("[vtunnel] at least one -forward is required")
 	}
 
-	opts := []vtunnel.Option{vtunnel.WithProtocol(parseProtocol(*protocol))}
+	opts := []vtunnel.Option{vtunnel.WithProtocol(parseProtocol(*protocol, true))}
+	opts = append(opts, testRoots()...)
+	if *upgradeKey != "" {
+		opts = append(opts, vtunnel.WithUpgradeKey(readSecret(*upgradeKey)))
+	}
 	if *key != "" {
 		opts = append(opts, vtunnel.WithSecret(readSecret(*key)))
 		log.Println("[vtunnel] Tunnel authentication enabled")
@@ -484,20 +497,33 @@ func envOr(name, def string) string {
 // An unrecognised value is fatal rather than a fallback to the default. The
 // two ends must agree, and a typo that quietly leaves one of them on ssh would
 // present as a handshake that never completes.
-func parseProtocol(v string) vtunnel.Protocol {
+func parseProtocol(v string, client bool) vtunnel.Protocol {
+	p, err := protocolFor(v, client)
+	if err != nil {
+		log.Fatalf("[vtunnel] %v", err)
+	}
+	return p
+}
+
+func protocolFor(v string, client bool) (vtunnel.Protocol, error) {
 	switch vtunnel.Protocol(v) {
-	case "":
-		return vtunnel.ProtocolSSH
-	case vtunnel.ProtocolSSH:
-		return vtunnel.ProtocolSSH
+	case "", vtunnel.ProtocolSSH:
+		return vtunnel.ProtocolSSH, nil
 	case vtunnel.ProtocolYamux:
-		return vtunnel.ProtocolYamux
+		return vtunnel.ProtocolYamux, nil
 	case vtunnel.ProtocolYamuxInsecure:
-		return vtunnel.ProtocolYamuxInsecure
+		return vtunnel.ProtocolYamuxInsecure, nil
+	case vtunnel.ProtocolYamuxWSS:
+		if client {
+			return vtunnel.ProtocolYamuxWSS, nil
+		}
+		// This server listens on a bare ws:// port and has nowhere to check a
+		// signed upgrade; yamux-wss would leave it open to anyone.
+		return "", fmt.Errorf("-protocol %q is for a server that checks signed upgrades — the Durable Object in ts/, "+
+			"or a Go server built on UpgradeVerifier — not this command", v)
 	default:
-		log.Fatalf("[vtunnel] unknown -protocol %q: expected %q, %q or %q",
-			v, vtunnel.ProtocolSSH, vtunnel.ProtocolYamux, vtunnel.ProtocolYamuxInsecure)
-		return ""
+		return "", fmt.Errorf("unknown -protocol %q: expected %q, %q, %q or %q (client only)",
+			v, vtunnel.ProtocolSSH, vtunnel.ProtocolYamux, vtunnel.ProtocolYamuxInsecure, vtunnel.ProtocolYamuxWSS)
 	}
 }
 

@@ -1,0 +1,18 @@
+{
+  "name": "vtunnel-cloudflare-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@vivid-money/vtunnel": "file:../../ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.149.0"
+  }
+}

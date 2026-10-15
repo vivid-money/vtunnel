@@ -3,6 +3,7 @@ package vtunnel
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 
 	"github.com/vivid-money/vtunnel/internal/session"
+	"github.com/vivid-money/vtunnel/internal/transport/ws"
 	"github.com/vivid-money/vtunnel/internal/tunnelkey"
 )
 
@@ -47,6 +49,17 @@ type Client struct {
 
 	// keys authenticates both ends; nil means the tunnel is unauthenticated.
 	keys *tunnelkey.Keys
+
+	// upgradeKey signs the WebSocket upgrade under ProtocolYamuxWSS, and
+	// upgradeKeyErr is why WithUpgradeKey could not read it, reported by
+	// Connect. customDialer records that WithDialer was given, which that
+	// protocol refuses: its dialer is where its security lives.
+	upgradeKey    []byte
+	upgradeKeyErr error
+	customDialer  bool
+	// testRoots replaces the system roots for ProtocolYamuxWSS. Only a test
+	// build can set it (WithTestRootCAs, build tag vtunnel_testing).
+	testRoots *x509.CertPool
 
 	// proxy is the controlplane-side MITM proxy and the single place routes are
 	// declared. It holds every target, header and the MITM CA — none of which
@@ -153,6 +166,15 @@ func WithSecret(secret string) Option {
 func WithDialer(d Dialer) Option {
 	return func(c *Client) {
 		c.dialer = d
+	}
+}
+
+// WithUpgradeKey sets the key [ProtocolYamuxWSS] signs its WebSocket upgrade
+// with: base64, at least 32 bytes — openssl rand -base64 32. The server holds
+// the same value. Other protocols ignore it.
+func WithUpgradeKey(key string) Option {
+	return func(c *Client) {
+		c.upgradeKey, c.upgradeKeyErr = ParseUpgradeKey(key)
 	}
 }
 
@@ -315,6 +337,7 @@ func NewClient(tunnelURL string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.customDialer = c.dialer != nil
 	if c.proxy == nil {
 		c.proxy = NewMITMProxy()
 	}
@@ -338,7 +361,11 @@ func NewClient(tunnelURL string, opts ...Option) *Client {
 	// Connect, or long after — reaches the sandbox without a second call.
 	c.proxy.OnChange(c.syncRoutes)
 
-	if c.protocol.insecure() {
+	if c.protocol == ProtocolYamuxWSS {
+		log.Printf("[vtunnel-client] Protocol %q: no cryptography inside the tunnel. The server is "+
+			"authenticated by its wss:// certificate alone, this client by its signed upgrade; "+
+			"whoever terminates that TLS sees the tunnel in the clear.", c.protocol)
+	} else if c.protocol.insecure() {
 		log.Printf("[vtunnel-client] WARNING: protocol %q has no encryption and no authentication. "+
 			"Any secret configured is ignored, and whoever answers this dial can pipe streams "+
 			"into every local target — the credential-injecting proxy included. "+
@@ -682,6 +709,9 @@ func (c *Client) Close() error {
 // transport resolves the dialer once, from [WithDialer] if one was given and
 // otherwise from the scheme of the URL passed to [NewClient].
 func (c *Client) transport() (Dialer, error) {
+	if c.protocol == ProtocolYamuxWSS {
+		return c.wssTransport()
+	}
 	if c.dialer != nil {
 		return c.dialer, nil
 	}
@@ -691,6 +721,36 @@ func (c *Client) transport() (Dialer, error) {
 	}
 	c.dialer = d
 	return d, nil
+}
+
+// wssTransport is the only transport ProtocolYamuxWSS runs over: wss://,
+// the certificate verified, the upgrade signed afresh on every dial. Each of
+// its conditions is the protocol's whole security, so none is negotiable.
+func (c *Client) wssTransport() (Dialer, error) {
+	switch {
+	case c.customDialer:
+		return nil, fmt.Errorf("vtunnel: protocol %q dials for itself; WithDialer would bypass its TLS check and its signed upgrade", c.protocol)
+	case c.upgradeKeyErr != nil:
+		return nil, c.upgradeKeyErr
+	case c.upgradeKey == nil:
+		return nil, fmt.Errorf("vtunnel: protocol %q needs WithUpgradeKey", c.protocol)
+	case !strings.HasPrefix(c.url, "wss://"):
+		return nil, fmt.Errorf("vtunnel: protocol %q runs over wss:// only, not %q", c.protocol, c.url)
+	}
+	key, roots := c.upgradeKey, c.testRoots
+	return func(ctx context.Context) (net.Conn, error) {
+		sign := func(host, path string) http.Header {
+			return http.Header{"Authorization": {signUpgrade(key, host, path, time.Now())}}
+		}
+		conn, err := ws.DialStrict(ctx, c.url, sign, roots, defaultHandshakeTimeout)
+		if err != nil {
+			return nil, err
+		}
+		// The keepalive, outside the tunnel: a ping inside it would wake a
+		// hibernating server every interval, this one is answered without.
+		ws.Heartbeat(conn, c.keepAlive, 3*c.keepAlive)
+		return conn, nil
+	}, nil
 }
 
 // dialOnce brings up one transport connection and one session over it.
@@ -714,7 +774,8 @@ func (c *Client) dialOnce() (session.Session, error) {
 	}
 
 	go serveStreams(sess, c.handleStream)
-	if c.keepAlive > 0 {
+	// yamux-wss keeps alive in its transport instead; see wssTransport.
+	if c.keepAlive > 0 && c.protocol != ProtocolYamuxWSS {
 		go keepAliveLoop(sess, c.keepAlive)
 	}
 	return sess, nil

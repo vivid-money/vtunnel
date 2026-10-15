@@ -1,0 +1,29 @@
+# The stand. The Go test fills in the port, the bundle, the TLS keypair and
+# the upgrade key: wss:// only, as yamux-wss requires.
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [
+    (name = "stand", worker = .standWorker),
+  ],
+  sockets = [
+    (name = "https", address = "127.0.0.1:{{PORT}}", service = "stand",
+     https = (options = (), tlsOptions = (keypair = (privateKey = embed "key.pem", certificateChain = embed "cert.pem")))),
+  ],
+);
+
+const standWorker :Workerd.Worker = (
+  compatibilityDate = "2026-10-01",
+  modules = [
+    (name = "worker.js", esModule = embed "{{BUNDLE}}"),
+  ],
+  durableObjectNamespaces = [
+    (className = "EgressTunnel", uniqueKey = "vtunnel-stand-egress"),
+  ],
+  durableObjectStorage = (inMemory = void),
+  bindings = [
+    (name = "EGRESS", durableObjectNamespace = "EgressTunnel"),
+    (name = "LOADER", workerLoader = ()),
+    (name = "VTUNNEL_UPGRADE_KEY", text = "{{UPGRADE_KEY}}"),
+  ],
+);

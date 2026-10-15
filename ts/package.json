@@ -1,0 +1,32 @@
+{
+  "name": "@vivid-money/vtunnel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The sandbox side of vtunnel in TypeScript, for any runtime with Web Streams; Cloudflare bindings under ./cloudflare",
+  "type": "module",
+  "exports": {
+    "./yamux": "./src/yamux.ts",
+    "./frame": "./src/frame.ts",
+    "./routes": "./src/routes.ts",
+    "./server": "./src/server.ts",
+    "./websocket": "./src/websocket.ts",
+    "./http1": "./src/http1.ts",
+    "./egress": "./src/egress.ts",
+    "./cloudflare": "./src/cloudflare/index.ts",
+    "./upgrade": "./src/upgrade.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.cloudflare.json",
+    "test:workerd": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@cloudflare/workers-types": "^5.20261009.1",
+    "@types/bun": "latest",
+    "@vitest/runner": "^4.1.0",
+    "@vitest/snapshot": "^4.1.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0"
+  }
+}

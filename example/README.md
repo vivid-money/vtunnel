@@ -1,5 +1,7 @@
 # Example
 
+For code running in Cloudflare reaching a private network through a Durable Object, see [`cloudflare/`](cloudflare/).
+
 ## Controlplane + Sandbox
 
 Run a container where all outbound HTTPS traffic is intercepted and credentials are injected outside the sandbox.

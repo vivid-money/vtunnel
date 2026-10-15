@@ -40,6 +40,25 @@ const (
 	// same code path without it. Both ends log a warning naming it, every time
 	// they start.
 	ProtocolYamuxInsecure Protocol = "yamux-insecure"
+
+	// ProtocolYamuxWSS is yamux straight over a wss:// WebSocket, for a server
+	// that cannot run TLS over a stream — a Cloudflare Durable Object, which is
+	// what it is for. The session adds no cryptography; everything rests on the
+	// transport:
+	//
+	//   - the server is authenticated by its certificate, checked against the
+	//     system roots and the URL's host — nothing configures that away;
+	//   - the client is authenticated by signing the upgrade request with an
+	//     upgrade key ([WithUpgradeKey]), bound to host and path, once only.
+	//
+	// So the client refuses to run it over anything but wss://, through a
+	// [WithDialer] of its own, or without a key. The tunnel secret plays no
+	// part. Unlike the other protocols, whoever terminates the TLS — the CDN in
+	// front of the server — sees the tunnel in the clear.
+	//
+	// Its keepalive is a text message beside the tunnel rather than a stream in
+	// it, which a hibernating Durable Object answers without waking.
+	ProtocolYamuxWSS Protocol = "yamux-wss"
 )
 
 // insecure reports whether p leaves the tunnel open to anyone who can reach it.
