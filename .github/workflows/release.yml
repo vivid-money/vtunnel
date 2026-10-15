@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   goreleaser:
@@ -33,11 +32,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ts/ as @vivid-money/vtunnel on GitHub Packages, versioned by the tag:
-  # v1.2.3 → 1.2.3 on dist-tag latest; v1.2.3-beta.4 → 1.2.3-beta.4 on dist-tag
-  # beta (the prerelease's name), so a prerelease never becomes what a plain
-  # install resolves to. The repository keeps version 0.0.0.
+  # ts/ as an npm package attached to the same GitHub release, versioned by the
+  # tag (v1.2.3-beta.4 → 1.2.3-beta.4; ts/package.json keeps 0.0.0). Public and
+  # tokenless, unlike a registry: a consumer depends on the asset's URL,
+  #   "@vivid-money/vtunnel": "https://github.com/vivid-money/vtunnel/releases/download/v1.2.3/vivid-money-vtunnel-1.2.3.tgz"
+  # After GoReleaser, which creates the release.
   npm:
+    needs: goreleaser
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,13 +50,6 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: "@vivid-money"
-
       - name: Install
         run: bun install --frozen-lockfile
 
@@ -65,14 +59,9 @@ jobs:
       - name: Test
         run: bun test
 
-      - name: Publish
+      - name: Pack and attach to the release
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          case "$version" in
-            *-*) dist_tag="${version#*-}"; dist_tag="${dist_tag%%.*}" ;;
-            *) dist_tag=latest ;;
-          esac
-          npm version --no-git-tag-version "$version"
-          npm publish --tag "$dist_tag"
+          npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+          gh release upload "$GITHUB_REF_NAME" "$(npm pack --silent)"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}

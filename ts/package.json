@@ -23,9 +23,6 @@
   "files": [
     "src"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.cloudflare.json",

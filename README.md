@@ -129,18 +129,17 @@ go install github.com/vivid-money/vtunnel/cmd/vtunnel@latest
 
 Or grab a binary from [Releases](https://github.com/vivid-money/vtunnel/releases).
 
-The TypeScript sandbox side ([`ts/`](ts/)) is `@vivid-money/vtunnel` on GitHub Packages, published as
-TypeScript source for a bundler (wrangler, esbuild, bun):
+The TypeScript sandbox side ([`ts/`](ts/)) is `@vivid-money/vtunnel`, an npm package attached to each
+release — TypeScript source for a bundler (wrangler, esbuild, bun), no registry and no token:
 
 ```bash
-echo "@vivid-money:registry=https://npm.pkg.github.com" >> .npmrc   # plus a token with read:packages
-npm install @vivid-money/vtunnel@1.0.0-beta.6
+npm install https://github.com/vivid-money/vtunnel/releases/download/v1.0.0-beta.6/vivid-money-vtunnel-1.0.0-beta.6.tgz
 ```
 
 **Releasing.** One tag releases both: pushing `vX.Y.Z` (or `vX.Y.Z-beta.N`) runs
-[`release.yml`](.github/workflows/release.yml) — GoReleaser for the Go module and binaries, and the npm
-package at the tag's version, after its typecheck and tests. A prerelease goes to the dist-tag named by it
-(`beta`), a release to `latest`; `ts/package.json` keeps `0.0.0`.
+[`release.yml`](.github/workflows/release.yml) — GoReleaser for the Go module and binaries, then the npm
+package at the tag's version, typechecked and tested, attached to the same release. `ts/package.json`
+keeps `0.0.0`.
 
 Upgrading from 0.6.x? Interception moved out of the sandbox, the tunnel keypair became a shared secret, and the wire protocol changed — see [MIGRATING.md](MIGRATING.md).
 
