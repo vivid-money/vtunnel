@@ -129,6 +129,18 @@ go install github.com/vivid-money/vtunnel/cmd/vtunnel@latest
 
 Or grab a binary from [Releases](https://github.com/vivid-money/vtunnel/releases).
 
+The TypeScript sandbox side ([`ts/`](ts/)) is `@vivid-money/vtunnel`, an npm package attached to each
+release — TypeScript source for a bundler (wrangler, esbuild, bun), no registry and no token:
+
+```bash
+npm install https://github.com/vivid-money/vtunnel/releases/download/v1.0.0-beta.6/vivid-money-vtunnel-1.0.0-beta.6.tgz
+```
+
+**Releasing.** One tag releases both: pushing `vX.Y.Z` (or `vX.Y.Z-beta.N`) runs
+[`release.yml`](.github/workflows/release.yml) — GoReleaser for the Go module and binaries, then the npm
+package at the tag's version, typechecked and tested, attached to the same release. `ts/package.json`
+keeps `0.0.0`.
+
 Upgrading from 0.6.x? Interception moved out of the sandbox, the tunnel keypair became a shared secret, and the wire protocol changed — see [MIGRATING.md](MIGRATING.md).
 
 ---

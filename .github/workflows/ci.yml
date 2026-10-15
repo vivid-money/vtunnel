@@ -29,3 +29,26 @@ jobs:
       - name: Test e2e
         run: go test -race ./...
         working-directory: e2e
+
+  # The TypeScript side (ts/): the package release.yml publishes, so a tag
+  # never ships what this has not checked.
+  ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
