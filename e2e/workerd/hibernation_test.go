@@ -87,3 +87,32 @@ func TestSilentControllerIsDropped(t *testing.T) {
 		t.Errorf("controllers = %d, want the frozen one dropped", st.Controllers)
 	}
 }
+
+// A controller that keeps talking stays, however busy the object is. On
+// Cloudflare a busy object dropped both of its live controllers again and again
+// ("not answering, closing its session"), its calls failing with "controller
+// stopped answering": the staleness check read only the auto-response
+// timestamp, which a heartbeat or frame that reaches the handler leaves behind.
+// Local workerd keeps auto-answering while awake, so here this guards the busy
+// path rather than reproducing that.
+func TestBusyObjectKeepsLiveControllers(t *testing.T) {
+	s := newStand(t)
+	s.addController()
+	s.addController()
+
+	// Past the stand's staleMs of 4 s, thrice; a call every 200 ms keeps the
+	// object awake without running the machine out of ports.
+	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(200 * time.Millisecond) {
+		if out := s.run("parallel", "n=4"); out["ok"] != float64(4) {
+			t.Fatalf("%s into a busy object: %v", time.Since(start).Round(time.Second), out)
+		}
+	}
+	if st := s.status(); st.Controllers != 2 {
+		t.Errorf("controllers = %d, want both live ones kept", st.Controllers)
+	}
+	for i, logs := range s.ctrlLogs {
+		if strings.Contains(logs.String(), "Reconnect") {
+			t.Errorf("controller %d reconnected:\n%s", i, logs)
+		}
+	}
+}

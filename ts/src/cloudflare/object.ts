@@ -44,7 +44,8 @@ const STALE_MS = 90_000;
  *
  *   - Their heartbeat ("vtunnel:ping") is answered by the runtime without
  *     waking the object, which also records when each last pinged — how a
- *     vanished controller is told from a quiet one.
+ *     vanished controller is told from a quiet one. Whatever does reach the
+ *     object — a heartbeat it answers itself, a frame — counts as well.
  *   - Each connection's routes and stream ID ceiling live in its attachment;
  *     on waking, the constructor rebuilds every session from them.
  *   - Nothing here keeps a timer running while idle; one would keep the
@@ -59,6 +60,12 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
   protected readonly server = new TunnelServer({ keepAliveMs: 0 });
   protected readonly egress = new TunnelEgress(this.server);
   private readonly sessions = new Map<string, Session>();
+  /**
+   * When each controller last sent anything that reached webSocketMessage, by
+   * session id: a heartbeat the runtime did not auto-answer, or a frame. Either
+   * says the controller is there; the auto-response timestamp sees neither.
+   */
+  private readonly heard = new Map<string, number>();
   private verifier: UpgradeVerifier | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -122,6 +129,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       ws.close(1011, "vtunnel: session lost");
       return;
     }
+    this.heard.set((ws.deserializeAttachment() as Attachment).id, Date.now());
     if (typeof message === "string") {
       // A ping that reached the handler is still a ping; anything else is
       // not from a vtunnel peer.
@@ -212,11 +220,17 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
           save();
         },
         alive: () => {
-          const last = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? state.since;
+          const last = Math.max(
+            this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? state.since,
+            this.heard.get(state.id) ?? 0,
+          );
           return Date.now() - last <= this.staleMs;
         },
       })
-      .finally(() => this.sessions.delete(state.id));
+      .finally(() => {
+        this.sessions.delete(state.id);
+        this.heard.delete(state.id);
+      });
   }
 
   private sessionOf(ws: WebSocket): Session | undefined {
