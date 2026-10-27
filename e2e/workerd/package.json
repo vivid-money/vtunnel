@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "workerd": "1.20261009.1"
+    "workerd": "1.20261027.1"
   }
 }
