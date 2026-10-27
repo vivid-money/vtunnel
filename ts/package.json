@@ -29,12 +29,12 @@
     "test:workerd": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.0",
-    "@cloudflare/workers-types": "^5.20261009.1",
+    "@cloudflare/vitest-plugin": "^1.4.8",
+    "@cloudflare/workers-types": "^5.20261027.1",
     "@types/bun": "latest",
-    "@vitest/runner": "^4.1.0",
-    "@vitest/snapshot": "^4.1.0",
-    "typescript": "^5.9.0",
-    "vitest": "^4.1.0"
+    "@vitest/runner": "^4.1.11",
+    "@vitest/snapshot": "^5.0.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }
