@@ -164,6 +164,18 @@ describe("fetch", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("no route: the 502 does not wait for a clone kept for a retry", async () => {
+    const body = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => {}) });
+    const request = new Request("https://elsewhere.test/", { method: "POST", body, duplex: "half" } as RequestInit);
+    // One branch of a tee settles its cancel only when the other is cancelled
+    // or read to the end, and the caller does neither before it has an answer.
+    const kept = request.clone();
+    const res = await Promise.race([h.egress.fetch(request), new Promise<"hung">((r) => setTimeout(() => r("hung"), 500))]);
+    expect(res).toBeInstanceOf(Response);
+    expect((res as Response).status).toBe(502);
+    await kept.body?.cancel();
+  });
+
   test("abort mid-response fails the body", async () => {
     const ac = new AbortController();
     const res = await h.egress.fetch(new Request("http://api.test/sse", { signal: ac.signal }));

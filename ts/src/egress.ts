@@ -69,8 +69,9 @@ export class TunnelEgress {
         // Nothing will read it. Left alone, the runtime keeps delivering it:
         // through a gateway, the application's upload outlives the answer
         // and fails with "Can't read from request stream after response has
-        // been sent".
-        await request.body?.cancel().catch(() => {});
+        // been sent". Not awaited: with a clone of the request kept unread,
+        // this settles only once the clone is cancelled or read to the end.
+        void request.body?.cancel().catch(() => {});
         return refusal(502, `vtunnel: no route for ${hostPort}`);
       }
       throw e;
