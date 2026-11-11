@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -42,7 +43,7 @@ func muxConfig(cfg Config) *yamux.Config {
 }
 
 func dialYamux(conn net.Conn, cfg Config) (Session, error) {
-	s, err := yamux.Client(conn, muxConfig(cfg))
+	s, err := yamux.Client(&frameConn{Conn: conn}, muxConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("yamux: %w", err)
 	}
@@ -50,11 +51,59 @@ func dialYamux(conn net.Conn, cfg Config) (Session, error) {
 }
 
 func serveYamux(conn net.Conn, cfg Config) (Session, error) {
-	s, err := yamux.Server(conn, muxConfig(cfg))
+	s, err := yamux.Server(&frameConn{Conn: conn}, muxConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("yamux: %w", err)
 	}
 	return muxSession{s}, nil
+}
+
+// frameHeaderSize is yamux's frame header: version, type, flags, stream id,
+// length (hashicorp/yamux const.go).
+const frameHeaderSize = 12
+
+// frameConn hands each yamux data frame to conn in one Write.
+//
+// yamux's send loop writes a data frame as two calls: the 12-byte header, then
+// the body (hashicorp/yamux session.go, sendLoop). Under yamux-wss every Write
+// is one WebSocket message, so every frame was two — and on Cloudflare each
+// message a Durable Object receives wakes it, is billed and is logged on its
+// own. Under KindYamux it was two TLS records.
+//
+// frameConn holds a data header that announces a body and sends it together
+// with the next Write, which is that body: the send loop is conn's only writer
+// and writes the body right after the header, so nothing waits. The bytes and
+// their order are unchanged; only where one message ends moves.
+//
+// frame is reused from one frame to the next, as the send loop reuses its own
+// body buffer: it grows to the largest frame and stays there.
+type frameConn struct {
+	net.Conn
+	frame []byte
+	held  bool
+}
+
+func (c *frameConn) Write(b []byte) (int, error) {
+	if !c.held && announcesBody(b) {
+		c.frame = append(c.frame[:0], b...)
+		c.held = true
+		return len(b), nil
+	}
+	if !c.held {
+		return c.Conn.Write(b)
+	}
+	c.held = false
+	c.frame = append(c.frame, b...)
+	n, err := c.Conn.Write(c.frame)
+	return max(n-frameHeaderSize, 0), err
+}
+
+// announcesBody says b is exactly a yamux data header with a non-zero length.
+// Window updates, pings and go-aways carry no body; a data frame of length 0
+// (a bare SYN, ACK or FIN) has none either.
+func announcesBody(b []byte) bool {
+	const typeData = 0
+	return len(b) == frameHeaderSize && b[0] == 0 && b[1] == typeData && binary.BigEndian.Uint32(b[8:12]) > 0
 }
 
 // muxSession is yamux with the one method it is missing, and streams that can
