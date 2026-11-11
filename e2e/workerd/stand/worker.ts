@@ -19,11 +19,9 @@ interface Env {
   VTUNNEL_UPGRADE_KEY: string;
 }
 
+// The stand's controllers ping every second and say so in their upgrade, so
+// the object takes four seconds of silence for a dead one without being told.
 export class EgressTunnel extends VTunnelObject<Env> {
-  // The stand's controllers ping every second, so a few seconds of silence
-  // is a dead one; the default is for a 30-second heartbeat.
-  protected override readonly staleMs = 4_000;
-
   // Made once per construction: a new value means the object was evicted and
   // built again — woken from hibernation, or restarted.
   private readonly incarnation = crypto.randomUUID();

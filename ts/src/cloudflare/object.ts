@@ -16,6 +16,14 @@ interface Attachment {
   label: string;
   /** When the controller connected: its liveness until its first heartbeat. */
   since: number;
+  /**
+   * Who connected, the same across the controller's reconnects
+   * (vtunnel-client in the upgrade's query). Absent from controllers that do
+   * not send it.
+   */
+  client?: string;
+  /** How long the controller may be silent before it is taken for gone. */
+  staleMs?: number;
   /** port → domains, as the controller last declared them. */
   routes: [number, string[]][];
   /** Stream IDs from here up are unused; a rebuilt session starts here. */
@@ -30,10 +38,22 @@ interface Attachment {
 const STREAM_BLOCK = 2048;
 
 /**
- * A controller that has not pinged for this long is gone. It pings every 30
- * seconds (vtunnel.WithKeepAlive), and gives up on its own end after 90.
+ * A controller that has not pinged for this long is gone, unless it said how
+ * often it pings. The default interval is 30 seconds (vtunnel.WithKeepAlive),
+ * and a controller gives up on its own end after three of them.
  */
 const STALE_MS = 90_000;
+
+/**
+ * A controller that says it pings every n ms is gone after STALE_PINGS * n of
+ * silence: one ping past the three after which it gives up on its own end, so
+ * that it is always the controller that notices first, and redials.
+ */
+const STALE_PINGS = 4;
+
+/** The upgrade's query parameters (client.go, wssURL). */
+const CLIENT_PARAM = "vtunnel-client";
+const KEEPALIVE_PARAM = "vtunnel-keepalive";
 
 /**
  * VTunnelObject is the sandbox end of vtunnel as a Durable Object: controllers
@@ -108,7 +128,9 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       return new Response(`vtunnel: upgrade refused: ${refusal}\n`, { status: 401 });
     }
 
-    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    const query = new URL(request.url).searchParams;
+    const client = clientOf(query);
+    const [peer, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server);
     const id = crypto.randomUUID();
     const attachment: Attachment = {
@@ -117,10 +139,13 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       since: Date.now(),
       routes: [],
       streamCeiling: 2,
+      client,
+      staleMs: staleFor(query, this.staleMs),
     };
     server.serializeAttachment(attachment);
+    if (client) this.replace(client, server);
     this.resume(server);
-    return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, { status: 101, webSocket: peer });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -224,7 +249,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
             this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? state.since,
             this.heard.get(state.id) ?? 0,
           );
-          return Date.now() - last <= this.staleMs;
+          return Date.now() - last <= (state.staleMs ?? this.staleMs);
         },
       })
       .finally(() => {
@@ -233,8 +258,43 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       });
   }
 
+  /**
+   * Closes the sessions client already had: it is dialling again only because
+   * it has given up on them. Their connections can still look open here — the
+   * controller's close lost on the way — and a call given to one would wait
+   * for an answer that is never coming.
+   */
+  private replace(client: string, current: WebSocket): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === current) continue;
+      const state = ws.deserializeAttachment() as Attachment | null;
+      if (state?.client !== client) continue;
+      console.log(`[vtunnel-do] ${state.label}: replaced by the controller's new connection`);
+      const session = this.sessions.get(state.id);
+      if (session) session.close(new YamuxError("session_shutdown", "controller reconnected"));
+      else ws.close(1000, "vtunnel: replaced");
+    }
+  }
+
   private sessionOf(ws: WebSocket): Session | undefined {
     const state = ws.deserializeAttachment() as Attachment | null;
     return state ? this.sessions.get(state.id) : undefined;
   }
+}
+
+/** The controller's id from the upgrade's query, if it sent a usable one. */
+function clientOf(query: URLSearchParams): string | undefined {
+  const client = query.get(CLIENT_PARAM);
+  return client && /^[A-Za-z0-9_-]{1,64}$/.test(client) ? client : undefined;
+}
+
+/**
+ * How long the controller may be silent: STALE_PINGS of the intervals it
+ * said it pings at, but never longer than fallback, the object's own limit.
+ */
+function staleFor(query: URLSearchParams, fallback: number): number {
+  const raw = query.get(KEEPALIVE_PARAM);
+  if (raw === null || !/^[0-9]{1,9}$/.test(raw)) return fallback;
+  const interval = Number(raw);
+  return interval > 0 ? Math.min(fallback, STALE_PINGS * interval) : fallback;
 }

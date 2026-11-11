@@ -2,13 +2,16 @@ package vtunnel
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +33,11 @@ const (
 
 // Client connects to a vtunnel server and forwards connections.
 type Client struct {
-	url          string
+	url string
+	// id is this client across its reconnects, sent with every yamux-wss
+	// upgrade: a server that still holds a session from it learns that the
+	// session is dead (see wssURL).
+	id           string
 	dialer       Dialer
 	protocol     Protocol
 	streamWindow int
@@ -326,6 +333,7 @@ func NewClient(tunnelURL string, opts ...Option) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		url:          tunnelURL,
+		id:           rand.Text(),
 		forwards:     make(map[int]string),
 		done:         make(chan struct{}),
 		ctx:          ctx,
@@ -742,7 +750,7 @@ func (c *Client) wssTransport() (Dialer, error) {
 		sign := func(host, path string) http.Header {
 			return http.Header{"Authorization": {signUpgrade(key, host, path, time.Now())}}
 		}
-		conn, err := ws.DialStrict(ctx, c.url, sign, roots, defaultHandshakeTimeout)
+		conn, err := ws.DialStrict(ctx, c.wssURL(), sign, roots, defaultHandshakeTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -752,6 +760,38 @@ func (c *Client) wssTransport() (Dialer, error) {
 		return conn, nil
 	}, nil
 }
+
+// wssURL is the URL a yamux-wss upgrade goes to: the tunnel URL with this
+// client's id and heartbeat interval added to its query, which the upgrade
+// signs along with the path.
+//
+// The server needs both because a connection can die without its close ever
+// reaching the server — a half-open link, a close lost on the way — and the
+// client is the only end that notices: its heartbeat goes unanswered and it
+// dials again. The id lets the server drop the session it still holds for
+// this client the moment the new one arrives, rather than handing calls to it
+// until it has been silent long enough to be taken for gone; the interval
+// says how long that is.
+func (c *Client) wssURL() string {
+	u, err := url.Parse(c.url)
+	if err != nil {
+		return c.url // DialStrict reports it
+	}
+	q := u.Query()
+	q.Set(wssClientParam, c.id)
+	if c.keepAlive > 0 {
+		q.Set(wssKeepAliveParam, strconv.FormatInt(c.keepAlive.Milliseconds(), 10))
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// The query parameters of a yamux-wss upgrade; ts/src/cloudflare/object.ts
+// reads them.
+const (
+	wssClientParam    = "vtunnel-client"
+	wssKeepAliveParam = "vtunnel-keepalive"
+)
 
 // dialOnce brings up one transport connection and one session over it.
 func (c *Client) dialOnce() (session.Session, error) {

@@ -65,7 +65,14 @@ export class TunnelEgress {
     try {
       tunnel = await this.server.openTunnel(hostPort);
     } catch (e) {
-      if (e instanceof NoRouteError) return refusal(502, `vtunnel: no route for ${hostPort}`);
+      if (e instanceof NoRouteError) {
+        // Nothing will read it. Left alone, the runtime keeps delivering it:
+        // through a gateway, the application's upload outlives the answer
+        // and fails with "Can't read from request stream after response has
+        // been sent".
+        await request.body?.cancel().catch(() => {});
+        return refusal(502, `vtunnel: no route for ${hostPort}`);
+      }
       throw e;
     }
     const { stream } = tunnel;

@@ -2,11 +2,15 @@ package ws
 
 import (
 	"context"
+	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,3 +89,73 @@ func TestHeartbeatClosesASilentLink(t *testing.T) {
 		t.Fatal("a silent link was not closed")
 	}
 }
+
+// peerClose serves a peer that reads until the connection ends and hands back
+// how it ended: the close frame, if one came.
+func peerClose(t *testing.T) (net.Conn, <-chan error) {
+	t.Helper()
+	ended := make(chan error, 1)
+	conn := pair(t, func(raw *websocket.Conn) {
+		for {
+			if _, _, err := raw.NextReader(); err != nil {
+				ended <- err
+				return
+			}
+		}
+	})
+	return conn, ended
+}
+
+func closeFrame(t *testing.T, ended <-chan error) *websocket.CloseError {
+	t.Helper()
+	select {
+	case err := <-ended:
+		var ce *websocket.CloseError
+		if !errors.As(err, &ce) {
+			t.Fatalf("the peer saw %v, not a close frame", err)
+		}
+		return ce
+	case <-time.After(time.Second):
+		t.Fatal("the peer never saw the connection end")
+		return nil
+	}
+}
+
+// Closing says so: the peer gets a close frame, not just the end of the TCP
+// connection, which through a proxy may never reach it.
+func TestCloseSendsACloseFrame(t *testing.T) {
+	conn, ended := peerClose(t)
+	conn.Close()
+	if ce := closeFrame(t, ended); ce.Code != websocket.CloseNormalClosure {
+		t.Errorf("close code %d, want %d", ce.Code, websocket.CloseNormalClosure)
+	}
+}
+
+// Giving up on a silent link tells the peer why, and logs it here.
+func TestHeartbeatSaysWhyItClosed(t *testing.T) {
+	var logs strings.Builder
+	var mu sync.Mutex
+	log.SetOutput(writerFunc(func(p []byte) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return logs.Write(p)
+	}))
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	conn, ended := peerClose(t)
+	Heartbeat(conn, 10*time.Millisecond, 50*time.Millisecond)
+
+	ce := closeFrame(t, ended)
+	if ce.Code != websocket.CloseGoingAway || !strings.Contains(ce.Text, "no pong") {
+		t.Errorf("close frame %d %q, want %d saying no pong", ce.Code, ce.Text, websocket.CloseGoingAway)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logs.String(), "no pong") {
+		t.Errorf("nothing logged about the missing pong: %q", logs.String())
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

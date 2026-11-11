@@ -151,6 +151,19 @@ describe("fetch", () => {
     expect(await res.text()).toContain("no route for elsewhere.test:443");
   });
 
+  test("no route: the request body is let go of, not left unread", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => new Promise(() => {}),
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    const res = await h.egress.fetch(new Request("https://elsewhere.test/", { method: "POST", body, duplex: "half" } as RequestInit));
+    expect(res.status).toBe(502);
+    expect(cancelled).toBe(true);
+  });
+
   test("abort mid-response fails the body", async () => {
     const ac = new AbortController();
     const res = await h.egress.fetch(new Request("http://api.test/sse", { signal: ac.signal }));

@@ -77,7 +77,7 @@ func TestSilentControllerIsDropped(t *testing.T) {
 	s.ctrls[0].Process.Signal(syscall.SIGSTOP)
 	defer s.ctrls[0].Process.Signal(syscall.SIGCONT)
 
-	time.Sleep(5 * time.Second) // past the stand's staleMs of 4 s
+	time.Sleep(5 * time.Second) // past the 4 s of silence the object allows a controller pinging every second
 	for range 3 {
 		if out := s.run("parallel", "n=20"); out["ok"] != float64(20) {
 			t.Fatalf("with one controller frozen: %v", out)
@@ -100,7 +100,7 @@ func TestBusyObjectKeepsLiveControllers(t *testing.T) {
 	s.addController()
 	s.addController()
 
-	// Past the stand's staleMs of 4 s, thrice; a call every 200 ms keeps the
+	// Past the 4 s of silence the object allows, thrice; a call every 200 ms keeps the
 	// object awake without running the machine out of ports.
 	for start := time.Now(); time.Since(start) < 15*time.Second; time.Sleep(200 * time.Millisecond) {
 		if out := s.run("parallel", "n=4"); out["ok"] != float64(4) {
