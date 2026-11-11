@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { TunnelEgress } from "../egress.ts";
-import { TunnelServer } from "../server.ts";
+import { dialParams, TunnelServer } from "../server.ts";
 import { UpgradeVerifier } from "../upgrade.ts";
 import { PING_TEXT, PONG_TEXT } from "../websocket.ts";
 import { Session, YamuxError } from "../yamux.ts";
@@ -51,9 +51,6 @@ const STALE_MS = 90_000;
  */
 const STALE_PINGS = 4;
 
-/** The upgrade's query parameters (client.go, wssURL). */
-const CLIENT_PARAM = "vtunnel-client";
-const KEEPALIVE_PARAM = "vtunnel-keepalive";
 
 /**
  * VTunnelObject is the sandbox end of vtunnel as a Durable Object: controllers
@@ -128,8 +125,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       return new Response(`vtunnel: upgrade refused: ${refusal}\n`, { status: 401 });
     }
 
-    const query = new URL(request.url).searchParams;
-    const client = clientOf(query);
+    const { client, keepAliveMs } = dialParams(request.url);
     const [peer, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server);
     const id = crypto.randomUUID();
@@ -140,10 +136,11 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       routes: [],
       streamCeiling: 2,
       client,
-      staleMs: staleFor(query, this.staleMs),
+      // One ping past the three after which the controller gives up on its
+      // own end: it is always the one to notice first, and dial again.
+      staleMs: keepAliveMs ? Math.min(this.staleMs, STALE_PINGS * keepAliveMs) : undefined,
     };
     server.serializeAttachment(attachment);
-    if (client) this.replace(client, server);
     this.resume(server);
     return new Response(null, { status: 101, webSocket: peer });
   }
@@ -239,6 +236,8 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     this.sessions.set(state.id, session);
     void this.server
       .attach(session, state.label, {
+        client: state.client,
+        since: state.since,
         routes: state.routes,
         onRoutes: (routes) => {
           state.routes = routes;
@@ -258,43 +257,9 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       });
   }
 
-  /**
-   * Closes the sessions client already had: it is dialling again only because
-   * it has given up on them. Their connections can still look open here — the
-   * controller's close lost on the way — and a call given to one would wait
-   * for an answer that is never coming.
-   */
-  private replace(client: string, current: WebSocket): void {
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws === current) continue;
-      const state = ws.deserializeAttachment() as Attachment | null;
-      if (state?.client !== client) continue;
-      console.log(`[vtunnel-do] ${state.label}: replaced by the controller's new connection`);
-      const session = this.sessions.get(state.id);
-      if (session) session.close(new YamuxError("session_shutdown", "controller reconnected"));
-      else ws.close(1000, "vtunnel: replaced");
-    }
-  }
-
   private sessionOf(ws: WebSocket): Session | undefined {
     const state = ws.deserializeAttachment() as Attachment | null;
     return state ? this.sessions.get(state.id) : undefined;
   }
 }
 
-/** The controller's id from the upgrade's query, if it sent a usable one. */
-function clientOf(query: URLSearchParams): string | undefined {
-  const client = query.get(CLIENT_PARAM);
-  return client && /^[A-Za-z0-9_-]{1,64}$/.test(client) ? client : undefined;
-}
-
-/**
- * How long the controller may be silent: STALE_PINGS of the intervals it
- * said it pings at, but never longer than fallback, the object's own limit.
- */
-function staleFor(query: URLSearchParams, fallback: number): number {
-  const raw = query.get(KEEPALIVE_PARAM);
-  if (raw === null || !/^[0-9]{1,9}$/.test(raw)) return fallback;
-  const interval = Number(raw);
-  return interval > 0 ? Math.min(fallback, STALE_PINGS * interval) : fallback;
-}

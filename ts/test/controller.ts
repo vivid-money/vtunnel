@@ -3,7 +3,7 @@
 
 import type { Subprocess } from "bun";
 import { TunnelEgress } from "../src/egress.ts";
-import { TunnelServer } from "../src/server.ts";
+import { dialParams, TunnelServer } from "../src/server.ts";
 import type { SessionOptions } from "../src/yamux.ts";
 import { str, tick } from "./helpers.ts";
 import { buildGoHelper, serveSessions, type WSServer } from "./wsserver.ts";
@@ -34,15 +34,20 @@ export class Harness {
   private readonly stderr: Promise<string>[] = [];
 
   constructor(session: SessionOptions = {}) {
-    this.ws = serveSessions((s) => void this.server.attach(s, `pod-${this.ws.sessions.length}`), session);
+    // A host serving the tunnel the way one should: who connected comes from
+    // the URL, so a controller that reconnects replaces its dead session.
+    this.ws = serveSessions(
+      (s, url) => void this.server.attach(s, `pod-${this.ws.sessions.length}`, { client: dialParams(url).client }),
+      session,
+    );
   }
 
-  /** Starts n controllers and waits until each is set up and routed. */
-  async start(n = 1): Promise<this> {
+  /** Starts n controllers, with args besides -url, and waits until each is set up and routed. */
+  async start(n = 1, args: string[] = []): Promise<this> {
     if (!built) throw new Error("buildController() first");
     const ready: Promise<boolean>[] = [];
     for (let i = 0; i < n; i++) {
-      const p = Bun.spawn([built.bin, "-url", this.ws.url], { stdout: "pipe", stderr: "pipe" });
+      const p = Bun.spawn([built.bin, "-url", this.ws.url, ...args], { stdout: "pipe", stderr: "pipe" });
       this.procs.push(p);
       this.stderr.push(new Response(p.stderr).text());
       ready.push(readyLine(p.stdout));

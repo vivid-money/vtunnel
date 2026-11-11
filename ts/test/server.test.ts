@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { encodeFrame, FrameReader, type StreamHeader, type StreamReply } from "../src/frame.ts";
-import { NoRouteError, TunnelServer } from "../src/server.ts";
+import { CLIENT_PARAM, dialParams, KEEPALIVE_PARAM, NoRouteError, TunnelServer } from "../src/server.ts";
 import type { Session } from "../src/yamux.ts";
 import { pair, readAll, str, text, tick, writeAll } from "./helpers.ts";
 
@@ -198,6 +198,51 @@ describe("resuming and liveness", () => {
     answering = false;
     for (let i = 0; i < 3; i++) expect((await server.openTunnel("api.corp:443")).session).toBe("live");
     expect(dead.server.isClosed).toBe(true);
+  });
+});
+
+describe("a controller that reconnects", () => {
+  test("replaces its old session, whose close may never come", async () => {
+    const server = new TunnelServer(quiet);
+    const old = pair();
+    const now = pair();
+    void server.attach(old.server, "old", { client: "c1", routes: [[1, ["api.corp"]]] });
+    void server.attach(now.server, "new", { client: "c1", routes: [[2, ["api.corp"]]] });
+    expect(old.server.isClosed).toBe(true);
+    expect(server.sessions).toBe(1);
+    for (let i = 0; i < 3; i++) expect((await server.openTunnel("api.corp:443")).session).toBe("new");
+  });
+
+  test("an older session attaching after a newer one is the one closed", async () => {
+    // Sessions rebuilt after a restart attach in no particular order.
+    const server = new TunnelServer(quiet);
+    const now = pair();
+    const old = pair();
+    void server.attach(now.server, "new", { client: "c1", since: 2000 });
+    void server.attach(old.server, "old", { client: "c1", since: 1000 });
+    expect(old.server.isClosed).toBe(true);
+    expect(now.server.isClosed).toBe(false);
+    expect(server.sessions).toBe(1);
+  });
+
+  test("other controllers, and controllers that do not say who they are, are left alone", async () => {
+    const server = new TunnelServer(quiet);
+    const sessions = [pair(), pair(), pair(), pair()];
+    void server.attach(sessions[0]!.server, "a", { client: "c1" });
+    void server.attach(sessions[1]!.server, "b", { client: "c2" });
+    void server.attach(sessions[2]!.server, "c");
+    void server.attach(sessions[3]!.server, "d");
+    expect(server.sessions).toBe(4);
+    for (const p of sessions) expect(p.server.isClosed).toBe(false);
+  });
+
+  test("dialParams reads who it is and how often it pings, and nothing malformed", () => {
+    const at = (q: string) => dialParams(`wss://sandbox.test/tunnel?${q}`);
+    expect(at(`${CLIENT_PARAM}=AbC_-9&${KEEPALIVE_PARAM}=5000&x=1`)).toEqual({ client: "AbC_-9", keepAliveMs: 5000 });
+    expect(at("x=1")).toEqual({});
+    expect(at(`${CLIENT_PARAM}=has%20space&${KEEPALIVE_PARAM}=-1`)).toEqual({});
+    expect(at(`${CLIENT_PARAM}=${"a".repeat(65)}&${KEEPALIVE_PARAM}=0`)).toEqual({});
+    expect(at(`${KEEPALIVE_PARAM}=1e3`)).toEqual({});
   });
 });
 
