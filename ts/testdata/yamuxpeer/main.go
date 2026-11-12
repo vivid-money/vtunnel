@@ -159,6 +159,15 @@ func holdOpen(sess session.Session, n int) error {
 	for _, stream := range streams {
 		stream.Close()
 	}
+	// Wait for the TypeScript end's FIN on every stream before taking the
+	// session down: its echo is a pipeTo that settles only once it has passed
+	// our FIN back, and one still running when the transport closes rejects
+	// with nobody to hear it.
+	for i, stream := range streams {
+		if n, err := io.Copy(io.Discard, stream); err != nil || n != 0 {
+			return fmt.Errorf("stream %d: %d bytes past the echo, %v", i, n, err)
+		}
+	}
 	return sess.Close()
 }
 
