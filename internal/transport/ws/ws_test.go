@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -131,16 +130,89 @@ func TestCloseSendsACloseFrame(t *testing.T) {
 	}
 }
 
-// Giving up on a silent link tells the peer why, and logs it here.
-func TestHeartbeatSaysWhyItClosed(t *testing.T) {
+// captureLog collects what is logged until the test ends.
+func captureLog(t *testing.T) func() string {
+	t.Helper()
 	var logs strings.Builder
 	var mu sync.Mutex
+	prev := log.Writer()
 	log.SetOutput(writerFunc(func(p []byte) (int, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return logs.Write(p)
 	}))
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return logs.String()
+	}
+}
+
+// readToEnd reads conn until it fails.
+func readToEnd(conn net.Conn) error {
+	buf := make([]byte, 4096)
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			return err
+		}
+	}
+}
+
+// A peer that closes for a reason is logged with it; a plain goodbye is not.
+func TestPeerCloseIsLoggedWithItsReason(t *testing.T) {
+	logs := captureLog(t)
+	closing := func(code int, reason string) net.Conn {
+		return pair(t, func(raw *websocket.Conn) {
+			raw.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+	readToEnd(closing(websocket.CloseNormalClosure, ""))
+	if got := logs(); got != "" {
+		t.Errorf("a plain goodbye was logged: %q", got)
+	}
+	readToEnd(closing(websocket.CloseGoingAway, "vtunnel: controller stopped answering"))
+	if got := logs(); !strings.Contains(got, "controller stopped answering") {
+		t.Errorf("the peer's reason was not logged: %q", got)
+	}
+}
+
+// A connection that drops is logged wherever the reader was: between
+// messages, or part of the way through one.
+func TestDropIsLoggedMidMessageToo(t *testing.T) {
+	for name, send := range map[string]func(*websocket.Conn){
+		"between messages": func(raw *websocket.Conn) {
+			raw.WriteMessage(websocket.BinaryMessage, make([]byte, 100))
+		},
+		"mid-message": func(raw *websocket.Conn) {
+			w, err := raw.NextWriter(websocket.BinaryMessage)
+			if err != nil {
+				return
+			}
+			w.Write(make([]byte, 3*BufferSize)) // goes out as fragments of a message that never ends
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLog(t)
+			conn := pair(t, func(raw *websocket.Conn) {
+				send(raw)
+				time.Sleep(50 * time.Millisecond)
+				raw.NetConn().Close()
+			})
+			if err := readToEnd(conn); err == nil {
+				t.Fatal("read succeeded on a dropped connection")
+			}
+			if got := logs(); strings.Count(got, "connection lost") != 1 {
+				t.Errorf("want the drop logged once, got %q", got)
+			}
+		})
+	}
+}
+
+// Giving up on a silent link tells the peer why, and logs it here.
+func TestHeartbeatSaysWhyItClosed(t *testing.T) {
+	logs := captureLog(t)
 
 	conn, ended := peerClose(t)
 	Heartbeat(conn, 10*time.Millisecond, 50*time.Millisecond)
@@ -149,10 +221,8 @@ func TestHeartbeatSaysWhyItClosed(t *testing.T) {
 	if ce.Code != websocket.CloseGoingAway || !strings.Contains(ce.Text, "no pong") {
 		t.Errorf("close frame %d %q, want %d saying no pong", ce.Code, ce.Text, websocket.CloseGoingAway)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !strings.Contains(logs.String(), "no pong") {
-		t.Errorf("nothing logged about the missing pong: %q", logs.String())
+	if got := logs(); !strings.Contains(got, "no pong") {
+		t.Errorf("nothing logged about the missing pong: %q", got)
 	}
 }
 

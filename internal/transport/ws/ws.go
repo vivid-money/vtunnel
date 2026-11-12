@@ -215,6 +215,7 @@ func (c *wsConn) Read(dst []byte) (int, error) {
 				return n, nil
 			}
 			if err != nil && err != io.EOF {
+				c.lost(err)
 				return 0, err
 			}
 			continue

@@ -77,7 +77,7 @@ func TestSilentControllerIsDropped(t *testing.T) {
 	s.ctrls[0].Process.Signal(syscall.SIGSTOP)
 	defer s.ctrls[0].Process.Signal(syscall.SIGCONT)
 
-	time.Sleep(5 * time.Second) // past the 4 s of silence the object allows a controller pinging every second
+	time.Sleep(6 * time.Second) // past the 5 s of silence the object allows a controller pinging every second
 	for range 3 {
 		if out := s.run("parallel", "n=20"); out["ok"] != float64(20) {
 			t.Fatalf("with one controller frozen: %v", out)
@@ -86,6 +86,10 @@ func TestSilentControllerIsDropped(t *testing.T) {
 	if st := s.status(); st.Controllers != 1 {
 		t.Errorf("controllers = %d, want the frozen one dropped", st.Controllers)
 	}
+
+	// Back, it finds its connection closed, and the object's reason with it.
+	s.ctrls[0].Process.Signal(syscall.SIGCONT)
+	s.waitForLog(0, "controller stopped answering")
 }
 
 // A controller that keeps talking stays, however busy the object is. On

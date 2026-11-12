@@ -98,7 +98,7 @@ export function requestBodyLength(request: Request): number | null | undefined {
  */
 export async function writeRequestBody(
   w: WritableStreamDefaultWriter<Uint8Array>,
-  body: ReadableStream<Uint8Array>,
+  body: ReadableStream<Uint8Array> | ReadableStreamDefaultReader<Uint8Array>,
   length: number | null,
 ): Promise<void> {
   let sent = 0;

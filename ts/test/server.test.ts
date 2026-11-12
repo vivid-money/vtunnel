@@ -213,6 +213,35 @@ describe("a controller that reconnects", () => {
     for (let i = 0; i < 3; i++) expect((await server.openTunnel("api.corp:443")).session).toBe("new");
   });
 
+  test("its routes carry over until it has declared them again", async () => {
+    const server = new TunnelServer(quiet);
+    const old = pair();
+    const now = pair();
+    void server.attach(old.server, "old", { client: "c1" });
+    const { port } = await request(old.client, { type: "listen", domains: ["api.corp"] });
+
+    const saved: [number, string[]][][] = [];
+    void server.attach(now.server, "new", { client: "c1", onRoutes: (r) => saved.push(r) });
+    // Before the controller has said anything on the new session.
+    expect(server.routes("api.corp:443")).toBe(true);
+    expect(await server.openTunnel("api.corp:443")).toMatchObject({ session: "new", port });
+    expect(saved).toEqual([[[port!, ["api.corp"]]]]);
+
+    // Its replay lands on the port carried over, here withdrawing a domain.
+    await request(now.client, { type: "listen", port, domains: ["other.corp"] });
+    expect(server.routes("api.corp:443")).toBe(false);
+    expect(server.routes("other.corp:443")).toBe(true);
+  });
+
+  test("routes are not carried to another controller's session", async () => {
+    const server = new TunnelServer(quiet);
+    const a = pair();
+    const b = pair();
+    void server.attach(a.server, "a", { client: "c1", routes: [[1, ["api.corp"]]] });
+    void server.attach(b.server, "b", { client: "c2" });
+    for (let i = 0; i < 3; i++) expect((await server.openTunnel("api.corp:443")).session).toBe("a");
+  });
+
   test("an older session attaching after a newer one is the one closed", async () => {
     // Sessions rebuilt after a restart attach in no particular order.
     const server = new TunnelServer(quiet);

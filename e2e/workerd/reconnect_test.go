@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // A controller whose link goes dead without a close reaching the object — a
@@ -23,7 +22,7 @@ func TestReconnectReplacesItsDeadSession(t *testing.T) {
 	s.addController()
 
 	link.silence()
-	s.waitForLog(0, "Reconnected", 15*time.Second)
+	s.waitForLog(0, "Reconnected")
 
 	// Before any call: the object has not had to go looking for a live
 	// session, so only the reconnect can have taken the dead one away.
@@ -44,21 +43,17 @@ func TestControllerLogsWhyItReconnected(t *testing.T) {
 	s.addControllerAt(link.url())
 
 	link.silence()
-	s.waitForLog(0, "Reconnected", 15*time.Second)
+	s.waitForLog(0, "Reconnected")
 	if logs := s.ctrlLogs[0].String(); !strings.Contains(logs, "no pong") {
 		t.Errorf("the controller reconnected without saying why:\n%s", logs)
 	}
 }
 
-func (s *stand) waitForLog(i int, text string, within time.Duration) {
+func (s *stand) waitForLog(i int, text string) {
 	s.t.Helper()
-	deadline := time.Now().Add(within)
-	for !strings.Contains(s.ctrlLogs[i].String(), text) {
-		if time.Now().After(deadline) {
-			s.t.Fatalf("controller %d never logged %q:\n%s", i, text, s.ctrlLogs[i])
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	s.waitFor(fmt.Sprintf("controller %d to log %q", i, text), func() bool {
+		return strings.Contains(s.ctrlLogs[i].String(), text)
+	})
 }
 
 // silencer is a TCP relay in front of the stand that can go quiet: silence

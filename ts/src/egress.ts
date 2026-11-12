@@ -61,19 +61,25 @@ export class TunnelEgress {
     }
     const hostPort = hostPortOf(url);
 
+    // Whenever this fails, nothing will read what is left of the body. Left
+    // alone, the runtime keeps delivering it: through a gateway, the
+    // application's upload outlives the answer and fails with "Can't read from
+    // request stream after response has been sent". Once the body is being
+    // sent it is locked, and only its reader, upload, can cancel it. Not
+    // awaited: with a clone of the request kept unread, the cancel settles
+    // only once the clone is cancelled or read to the end.
+    let upload: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const letGo = (why?: unknown) =>
+      void (upload ?? request.body)
+        ?.cancel(why)
+        .catch(() => {});
+
     let tunnel;
     try {
       tunnel = await this.server.openTunnel(hostPort);
     } catch (e) {
-      if (e instanceof NoRouteError) {
-        // Nothing will read it. Left alone, the runtime keeps delivering it:
-        // through a gateway, the application's upload outlives the answer
-        // and fails with "Can't read from request stream after response has
-        // been sent". Not awaited: with a clone of the request kept unread,
-        // this settles only once the clone is cancelled or read to the end.
-        void request.body?.cancel().catch(() => {});
-        return refusal(502, `vtunnel: no route for ${hostPort}`);
-      }
+      letGo(e);
+      if (e instanceof NoRouteError) return refusal(502, `vtunnel: no route for ${hostPort}`);
       throw e;
     }
     const { stream } = tunnel;
@@ -91,8 +97,10 @@ export class TunnelEgress {
       if (ended) return;
       ended = true;
       request.signal?.removeEventListener("abort", abort);
-      if (err !== undefined) stream.reset();
-      else void writer.close().catch(() => stream.reset());
+      if (err !== undefined) {
+        stream.reset();
+        letGo(err);
+      } else void writer.close().catch(() => stream.reset());
     };
 
     try {
@@ -100,8 +108,12 @@ export class TunnelEgress {
       await writer.write(encodeRequestHead(request, length));
       // The body goes out alongside reading the answer, not before it: a
       // server may answer early (a 413, a redirect) and stop reading.
-      const sending =
-        request.body && length !== undefined ? writeRequestBody(writer, request.body, length) : Promise.resolve();
+      let sending = Promise.resolve();
+      if (request.body && length !== undefined) {
+        const reader = request.body.getReader() as unknown as ReadableStreamDefaultReader<Uint8Array>;
+        upload = reader;
+        sending = writeRequestBody(writer, reader, length);
+      }
       sending.catch((e) => end(e));
 
       const head = await withTimeout(http.readHead(), this.responseHeaderTimeoutMs);

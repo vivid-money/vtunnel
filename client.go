@@ -768,7 +768,7 @@ func (c *Client) wssTransport() (Dialer, error) {
 }
 
 // dialURL is the URL a WebSocket transport dials: the tunnel URL with this
-// client's id and keepalive interval added to its query. Under yamux-wss the
+// client's id and keepalive interval added after its own query. Under yamux-wss the
 // upgrade signs them along with the path. A tcp:// URL has no query to carry
 // them and is returned as it is, and so is a URL that does not parse, for the
 // dialer to report.
@@ -787,12 +787,17 @@ func (c *Client) dialURL() string {
 	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
 		return c.url
 	}
-	q := u.Query()
-	q.Set(clientParam, c.id)
+	// Appended, not set through u.Query(): encoding that again would sort the
+	// URL's own parameters and drop what it cannot parse, and a signed or
+	// tokenised query has to arrive as it was written.
+	add := clientParam + "=" + url.QueryEscape(c.id)
 	if c.keepAlive > 0 {
-		q.Set(keepAliveParam, strconv.FormatInt(c.keepAlive.Milliseconds(), 10))
+		add += "&" + keepAliveParam + "=" + strconv.FormatInt(c.keepAlive.Milliseconds(), 10)
 	}
-	u.RawQuery = q.Encode()
+	if u.RawQuery != "" {
+		add = u.RawQuery + "&" + add
+	}
+	u.RawQuery = add
 	return u.String()
 }
 

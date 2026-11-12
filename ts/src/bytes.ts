@@ -100,8 +100,12 @@ const IDLE = Symbol("idle");
  * Durable Object over RPC in 4 KiB chunks, and every piece written to the
  * tunnel is a yamux frame and a WebSocket message.
  */
-export async function* coalesce(stream: ReadableStream<Uint8Array>, max = 64 * 1024): AsyncGenerator<Uint8Array> {
-  const reader = stream.getReader();
+export async function* coalesce(
+  stream: ReadableStream<Uint8Array> | ReadableStreamDefaultReader<Uint8Array>,
+  max = 64 * 1024,
+): AsyncGenerator<Uint8Array> {
+  // A caller that means to cancel the source itself hands over its reader.
+  const reader = "getReader" in stream ? stream.getReader() : stream;
   // Stopped before the end, the source is cancelled rather than released: a
   // consumer that stops early wants it stopped, and workerd refuses to release
   // a reader with a read outstanding, which there usually is.

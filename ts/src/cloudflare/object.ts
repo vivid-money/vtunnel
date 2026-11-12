@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { TunnelEgress } from "../egress.ts";
 import { dialParams, TunnelServer } from "../server.ts";
 import { UpgradeVerifier } from "../upgrade.ts";
-import { PING_TEXT, PONG_TEXT } from "../websocket.ts";
+import { closeWebSocket, PING_TEXT, PONG_TEXT } from "../websocket.ts";
 import { Session, YamuxError } from "../yamux.ts";
 
 /**
@@ -22,7 +22,7 @@ interface Attachment {
    * not send it.
    */
   client?: string;
-  /** How long the controller may be silent before it is taken for gone. */
+  /** How long the controller may be silent before it is taken for gone, if it said how often it pings. */
   staleMs?: number;
   /** port → domains, as the controller last declared them. */
   routes: [number, string[]][];
@@ -39,18 +39,22 @@ const STREAM_BLOCK = 2048;
 
 /**
  * A controller that has not pinged for this long is gone, unless it said how
- * often it pings. The default interval is 30 seconds (vtunnel.WithKeepAlive),
- * and a controller gives up on its own end after three of them.
+ * often it pings: three of the default 30-second intervals
+ * (vtunnel.WithKeepAlive).
  */
 const STALE_MS = 90_000;
 
 /**
  * A controller that says it pings every n ms is gone after STALE_PINGS * n of
- * silence: one ping past the three after which it gives up on its own end, so
- * that it is always the controller that notices first, and redials.
+ * silence, if that is less than staleMs. It gives up on its own end once a
+ * pong is more than three intervals late, which it looks at only as it pings:
+ * on the fourth ping after the last one answered. One more than that, so that
+ * a controller with a short interval notices first, and redials.
  */
-const STALE_PINGS = 4;
+const STALE_PINGS = 5;
 
+/** The least a controller's own interval can make that: an interval of a millisecond is not a second's silence. */
+const MIN_STALE_MS = 1_000;
 
 /**
  * VTunnelObject is the sandbox end of vtunnel as a Durable Object: controllers
@@ -72,7 +76,13 @@ const STALE_PINGS = 4;
  * not is taken for gone after staleMs, at the next call.
  */
 export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
-  /** How long a controller may go without pinging before it is taken for gone. */
+  /**
+   * How long a controller may go without pinging before it is taken for gone.
+   * A controller that says how often it pings (vtunnel-keepalive in the
+   * upgrade's query) is given five of its own intervals, and no less than a
+   * second, when that is shorter than this: raising it does not lengthen
+   * what such a controller gets.
+   */
   protected readonly staleMs: number = STALE_MS;
   protected readonly server = new TunnelServer({ keepAliveMs: 0 });
   protected readonly egress = new TunnelEgress(this.server);
@@ -136,9 +146,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       routes: [],
       streamCeiling: 2,
       client,
-      // One ping past the three after which the controller gives up on its
-      // own end: it is always the one to notice first, and dial again.
-      staleMs: keepAliveMs ? Math.min(this.staleMs, STALE_PINGS * keepAliveMs) : undefined,
+      staleMs: keepAliveMs ? Math.min(this.staleMs, Math.max(MIN_STALE_MS, STALE_PINGS * keepAliveMs)) : undefined,
     };
     server.serializeAttachment(attachment);
     this.resume(server);
@@ -216,13 +224,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     const session = new Session(
       {
         send: (data) => ws.send(data),
-        close: () => {
-          try {
-            ws.close(1000);
-          } catch {
-            // already closing
-          }
-        },
+        close: (reason) => closeWebSocket(ws, reason),
       },
       {
         firstStreamId: state.streamCeiling,
@@ -262,4 +264,3 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     return state ? this.sessions.get(state.id) : undefined;
   }
 }
-

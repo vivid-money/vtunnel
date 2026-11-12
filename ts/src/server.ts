@@ -74,7 +74,8 @@ export interface AttachOptions {
    * has given up on its connection, so a session it already has is dead,
    * whether or not its end of the connection has reached this one yet; it is
    * closed when the new one attaches, rather than handed calls until
-   * something notices.
+   * something notices, and its routes pass to the new one until the
+   * controller has declared them again.
    */
   client?: string;
   /**
@@ -173,6 +174,7 @@ export class TunnelServer {
       client: opts.client,
       since: opts.since ?? Date.now(),
     };
+    let inherited = false;
     if (peer.client !== undefined) {
       for (const other of this.peers) {
         if (other.client !== peer.client || other.session.isClosed) continue;
@@ -182,12 +184,23 @@ export class TunnelServer {
           return;
         }
         this.log(`${other.label}: replaced by ${label}, the same controller reconnected`);
+        // Its routes carry over, for the moment until the controller has
+        // declared them again on this session: it replays every listen under
+        // the port it had, so each one lands on the entry carried here, and
+        // the host is not without a route in between.
+        for (const [port, domains] of other.ports) {
+          if (!peer.ports.has(port)) {
+            peer.ports.set(port, domains);
+            inherited = true;
+          }
+        }
         // Out of the running now, not once its own attach has unwound.
         this.peers.delete(other);
         other.session.close(new YamuxError("session_shutdown", "controller reconnected"));
       }
     }
     reindex(peer);
+    if (inherited) peer.onRoutes?.([...peer.ports]);
     this.peers.add(peer);
     this.log(`${label}: connected (${this.peers.size} now)`);
     const keepAlive = this.keepAliveMs > 0 ? this.keepAlive(peer) : undefined;

@@ -2,6 +2,7 @@ package vtunnel
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,5 +59,19 @@ func TestDialURLSchemes(t *testing.T) {
 			t.Errorf("%s: client id sent = %v, want %v", raw, got, want)
 		}
 		c.Close()
+	}
+}
+
+// The tunnel URL's own query arrives as it was written — its order, its
+// encoding, what a parser would drop — with the client's parameters after it.
+func TestDialURLKeepsTheQueryAsWritten(t *testing.T) {
+	for _, query := range []string{"z=1&a=2", "a=b;c=d&x=1", "bad=%zz&z=2", "sig=a+b%2Fc&flag"} {
+		c := NewClient("wss://sandbox.example/t?" + query)
+		got := c.dialURL()
+		c.Close()
+		want := "wss://sandbox.example/t?" + query + "&" + clientParam + "="
+		if !strings.HasPrefix(got, want) {
+			t.Errorf("dialURL = %s, want it to start with %s", got, want)
+		}
 	}
 }
