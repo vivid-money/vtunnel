@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/hashicorp/yamux"
 )
@@ -71,36 +72,53 @@ const frameHeaderSize = 12
 // own. Under KindYamux it was two TLS records.
 //
 // frameConn holds a data header that announces a body and sends it together
-// with the next Write, which is that body: the send loop is conn's only writer
-// and writes the body right after the header, so nothing waits. The bytes and
-// their order are unchanged; only where one message ends moves.
+// with the next Write, which is that body: the send loop writes the body right
+// after the header, even when the stream's writer has given up waiting
+// (waitForSendErr copies the body rather than dropping it), so nothing waits.
+// The bytes and their order are unchanged; only where one message ends moves.
+//
+// The send loop is conn's only writer, so mu is never contended. It is there
+// for a second writer, should yamux ever grow one: that writer squeezing a
+// frame between a header and its body breaks the stream with or without
+// frameConn, and mu keeps it at that instead of a data race on frame.
 //
 // frame is reused from one frame to the next, as the send loop reuses its own
-// body buffer: it grows to the largest frame and stays there.
+// body buffer, up to maxKeptFrame. A single large stream Write makes a frame as
+// big as the stream window, and that is not memory to keep for the session.
 type frameConn struct {
 	net.Conn
-	frame []byte
-	held  bool
+	mu    sync.Mutex
+	frame []byte // a held data header, then its body; empty when none is held
 }
 
+// maxKeptFrame is the largest frame buffer frameConn keeps between frames:
+// comfortably above io.Copy's 32 KiB chunks, which is what a tunnel writes.
+const maxKeptFrame = 64 * 1024
+
 func (c *frameConn) Write(b []byte) (int, error) {
-	if !c.held && announcesBody(b) {
-		c.frame = append(c.frame[:0], b...)
-		c.held = true
-		return len(b), nil
-	}
-	if !c.held {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.frame) == 0 {
+		if announcesBody(b) {
+			c.frame = append(c.frame, b...)
+			return len(b), nil
+		}
 		return c.Conn.Write(b)
 	}
-	c.held = false
 	c.frame = append(c.frame, b...)
 	n, err := c.Conn.Write(c.frame)
+	if cap(c.frame) > maxKeptFrame {
+		c.frame = nil
+	} else {
+		c.frame = c.frame[:0]
+	}
 	return max(n-frameHeaderSize, 0), err
 }
 
 // announcesBody says b is exactly a yamux data header with a non-zero length.
-// Window updates, pings and go-aways carry no body; a data frame of length 0
-// (a bare SYN, ACK or FIN) has none either.
+// Window updates, pings and go-aways carry no body. yamux sends no data frame
+// of length 0 — SYN, ACK, FIN and RST go out as window updates (stream.go) —
+// so the length check is only defensive: such a header has no body to wait for.
 func announcesBody(b []byte) bool {
 	const typeData = 0
 	return len(b) == frameHeaderSize && b[0] == 0 && b[1] == typeData && binary.BigEndian.Uint32(b[8:12]) > 0
