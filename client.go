@@ -2,13 +2,16 @@ package vtunnel
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +33,11 @@ const (
 
 // Client connects to a vtunnel server and forwards connections.
 type Client struct {
-	url          string
+	url string
+	// id is this client across its reconnects, sent with every WebSocket
+	// upgrade: a server that still holds a session from it learns that the
+	// session is dead (see dialURL).
+	id           string
 	dialer       Dialer
 	protocol     Protocol
 	streamWindow int
@@ -160,6 +167,12 @@ func WithSecret(secret string) Option {
 // Wrapping [NewDialer] is the way to add behaviour the tunnel has no opinion
 // about — a retry, a dial through something else, artificial latency for a
 // benchmark. The URL passed to [NewClient] is then only a label for logs.
+//
+// Such a dialer dials the URL it was made for, without the client id the
+// client's own WebSocket dialer adds to the query: a server that takes several
+// controllers — the TypeScript TunnelServer, a Durable Object — then cannot
+// tell this client's reconnect from another controller, and keeps its dead
+// session until the keepalive finds it out.
 //
 // Reaching a sandbox over TCP instead of a WebSocket needs no option at all —
 // see [NewClient].
@@ -326,6 +339,7 @@ func NewClient(tunnelURL string, opts ...Option) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		url:          tunnelURL,
+		id:           rand.Text(),
 		forwards:     make(map[int]string),
 		done:         make(chan struct{}),
 		ctx:          ctx,
@@ -715,7 +729,7 @@ func (c *Client) transport() (Dialer, error) {
 	if c.dialer != nil {
 		return c.dialer, nil
 	}
-	d, err := NewDialer(c.url, nil)
+	d, err := NewDialer(c.dialURL(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -742,7 +756,7 @@ func (c *Client) wssTransport() (Dialer, error) {
 		sign := func(host, path string) http.Header {
 			return http.Header{"Authorization": {signUpgrade(key, host, path, time.Now())}}
 		}
-		conn, err := ws.DialStrict(ctx, c.url, sign, roots, defaultHandshakeTimeout)
+		conn, err := ws.DialStrict(ctx, c.dialURL(), sign, roots, defaultHandshakeTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -752,6 +766,46 @@ func (c *Client) wssTransport() (Dialer, error) {
 		return conn, nil
 	}, nil
 }
+
+// dialURL is the URL a WebSocket transport dials: the tunnel URL with this
+// client's id and keepalive interval added after its own query. Under yamux-wss the
+// upgrade signs them along with the path. A tcp:// URL has no query to carry
+// them and is returned as it is, and so is a URL that does not parse, for the
+// dialer to report.
+//
+// A server needs them because a connection can die without its close ever
+// reaching the server — a half-open link, a close lost on the way — and the
+// client is the only end that notices: its keepalive goes unanswered and it
+// dials again. The id lets a server that takes several controllers (the
+// TypeScript TunnelServer, a Durable Object) drop the session it still holds
+// for this client the moment the new one arrives, rather than handing calls to
+// it until it has been silent long enough to be taken for gone; the interval
+// says how long that is. A Go server takes one client at a time and replaces
+// it on any new connection, and ignores both.
+func (c *Client) dialURL() string {
+	u, err := url.Parse(c.url)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return c.url
+	}
+	// Appended, not set through u.Query(): encoding that again would sort the
+	// URL's own parameters and drop what it cannot parse, and a signed or
+	// tokenised query has to arrive as it was written.
+	add := clientParam + "=" + url.QueryEscape(c.id)
+	if c.keepAlive > 0 {
+		add += "&" + keepAliveParam + "=" + strconv.FormatInt(c.keepAlive.Milliseconds(), 10)
+	}
+	if u.RawQuery != "" {
+		add = u.RawQuery + "&" + add
+	}
+	u.RawQuery = add
+	return u.String()
+}
+
+// The query parameters dialURL adds; dialParams in ts/src/server.ts reads them.
+const (
+	clientParam    = "vtunnel-client"
+	keepAliveParam = "vtunnel-keepalive"
+)
 
 // dialOnce brings up one transport connection and one session over it.
 func (c *Client) dialOnce() (session.Session, error) {

@@ -63,7 +63,12 @@ export class YamuxError extends Error {
  */
 export interface Transport {
   send(data: Uint8Array): void;
-  close(): void;
+  /**
+   * reason is why this end is closing the session, when it is not a plain
+   * goodbye; a transport that can tell the peer does. It is absent when the
+   * transport itself is what ended.
+   */
+  close(reason?: Error): void;
 }
 
 export interface SessionOptions {
@@ -193,7 +198,7 @@ export class Session {
 
   /** Tells the session its transport is gone. */
   transportClosed(reason?: unknown): void {
-    this.close(reason instanceof Error ? reason : new YamuxError("session_shutdown", "transport closed"));
+    this.shut(reason instanceof Error ? reason : new YamuxError("session_shutdown", "transport closed"), undefined);
   }
 
   /** Opens a stream. Waits while too many opens are unacknowledged. */
@@ -273,14 +278,19 @@ export class Session {
    * fail with reason; a stream the peer had already finished keeps what it
    * has buffered and ends cleanly.
    */
-  close(reason: Error = new YamuxError("session_shutdown")): void {
+  close(reason?: Error): void {
+    this.shut(reason ?? new YamuxError("session_shutdown"), reason);
+  }
+
+  // told is what the transport is given to pass on to the peer.
+  private shut(reason: Error, told: Error | undefined): void {
     if (this.closeErr) return;
     this.closeErr = reason;
 
     for (const timer of this.inflight.values()) if (timer !== undefined) clearTimeout(timer);
     this.inflight.clear();
     try {
-      this.transport.close();
+      this.transport.close(told);
     } catch {
       // already gone
     }

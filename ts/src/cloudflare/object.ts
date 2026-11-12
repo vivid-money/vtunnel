@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { TunnelEgress } from "../egress.ts";
-import { TunnelServer } from "../server.ts";
+import { dialParams, TunnelServer } from "../server.ts";
 import { UpgradeVerifier } from "../upgrade.ts";
-import { PING_TEXT, PONG_TEXT } from "../websocket.ts";
+import { closeWebSocket, PING_TEXT, PONG_TEXT } from "../websocket.ts";
 import { Session, YamuxError } from "../yamux.ts";
 
 /**
@@ -16,6 +16,14 @@ interface Attachment {
   label: string;
   /** When the controller connected: its liveness until its first heartbeat. */
   since: number;
+  /**
+   * Who connected, the same across the controller's reconnects
+   * (vtunnel-client in the upgrade's query). Absent from controllers that do
+   * not send it.
+   */
+  client?: string;
+  /** How long the controller may be silent before it is taken for gone, if it said how often it pings. */
+  staleMs?: number;
   /** port → domains, as the controller last declared them. */
   routes: [number, string[]][];
   /** Stream IDs from here up are unused; a rebuilt session starts here. */
@@ -30,10 +38,23 @@ interface Attachment {
 const STREAM_BLOCK = 2048;
 
 /**
- * A controller that has not pinged for this long is gone. It pings every 30
- * seconds (vtunnel.WithKeepAlive), and gives up on its own end after 90.
+ * A controller that has not pinged for this long is gone, unless it said how
+ * often it pings: three of the default 30-second intervals
+ * (vtunnel.WithKeepAlive).
  */
 const STALE_MS = 90_000;
+
+/**
+ * A controller that says it pings every n ms is gone after STALE_PINGS * n of
+ * silence, if that is less than staleMs. It gives up on its own end once a
+ * pong is more than three intervals late, which it looks at only as it pings:
+ * on the fourth ping after the last one answered. One more than that, so that
+ * a controller with a short interval notices first, and redials.
+ */
+const STALE_PINGS = 5;
+
+/** The least a controller's own interval can make that: an interval of a millisecond is not a second's silence. */
+const MIN_STALE_MS = 1_000;
 
 /**
  * VTunnelObject is the sandbox end of vtunnel as a Durable Object: controllers
@@ -55,7 +76,13 @@ const STALE_MS = 90_000;
  * not is taken for gone after staleMs, at the next call.
  */
 export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
-  /** How long a controller may go without pinging before it is taken for gone. */
+  /**
+   * How long a controller may go without pinging before it is taken for gone.
+   * A controller that says how often it pings (vtunnel-keepalive in the
+   * upgrade's query) is given five of its own intervals, and no less than a
+   * second, when that is shorter than this: raising it does not lengthen
+   * what such a controller gets.
+   */
   protected readonly staleMs: number = STALE_MS;
   protected readonly server = new TunnelServer({ keepAliveMs: 0 });
   protected readonly egress = new TunnelEgress(this.server);
@@ -108,7 +135,8 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       return new Response(`vtunnel: upgrade refused: ${refusal}\n`, { status: 401 });
     }
 
-    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    const { client, keepAliveMs } = dialParams(request.url);
+    const [peer, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server);
     const id = crypto.randomUUID();
     const attachment: Attachment = {
@@ -117,10 +145,12 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
       since: Date.now(),
       routes: [],
       streamCeiling: 2,
+      client,
+      staleMs: keepAliveMs ? Math.min(this.staleMs, Math.max(MIN_STALE_MS, STALE_PINGS * keepAliveMs)) : undefined,
     };
     server.serializeAttachment(attachment);
     this.resume(server);
-    return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, { status: 101, webSocket: peer });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -194,13 +224,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     const session = new Session(
       {
         send: (data) => ws.send(data),
-        close: () => {
-          try {
-            ws.close(1000);
-          } catch {
-            // already closing
-          }
-        },
+        close: (reason) => closeWebSocket(ws, reason),
       },
       {
         firstStreamId: state.streamCeiling,
@@ -214,6 +238,8 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
     this.sessions.set(state.id, session);
     void this.server
       .attach(session, state.label, {
+        client: state.client,
+        since: state.since,
         routes: state.routes,
         onRoutes: (routes) => {
           state.routes = routes;
@@ -224,7 +250,7 @@ export class VTunnelObject<Env = unknown> extends DurableObject<Env> {
             this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? state.since,
             this.heard.get(state.id) ?? 0,
           );
-          return Date.now() - last <= this.staleMs;
+          return Date.now() - last <= (state.staleMs ?? this.staleMs);
         },
       })
       .finally(() => {

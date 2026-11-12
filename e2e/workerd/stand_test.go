@@ -193,8 +193,14 @@ func (s *stand) startWorkerd() {
 // addController starts one more controller and waits until it is routed.
 func (s *stand) addController() {
 	s.t.Helper()
+	s.addControllerAt(s.tunnelURL())
+}
+
+// addControllerAt starts a controller dialling url, which leads to this stand.
+func (s *stand) addControllerAt(url string) {
+	s.t.Helper()
 	logs := &syncBuffer{}
-	cmd := exec.Command(controller, "-url", s.tunnelURL(), "-protocol", "yamux-wss",
+	cmd := exec.Command(controller, "-url", url, "-protocol", "yamux-wss",
 		"-upgrade-key", upgradeKey, "-ca", certFile, "-keepalive", "1s")
 	cmd.Stderr = logs
 	stdout, err := cmd.StdoutPipe()

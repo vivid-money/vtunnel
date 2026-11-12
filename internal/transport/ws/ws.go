@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -200,6 +201,7 @@ type wsConn struct {
 	lastPong  atomic.Int64 // unix nanoseconds
 	done      chan struct{}
 	closeOnce sync.Once
+	lostOnce  sync.Once
 }
 
 func (c *wsConn) Read(dst []byte) (int, error) {
@@ -213,12 +215,14 @@ func (c *wsConn) Read(dst []byte) (int, error) {
 				return n, nil
 			}
 			if err != nil && err != io.EOF {
+				c.lost(err)
 				return 0, err
 			}
 			continue
 		}
 		kind, r, err := c.Conn.NextReader()
 		if err != nil {
+			c.lost(err)
 			return 0, err
 		}
 		if kind == websocket.TextMessage {
@@ -262,14 +266,17 @@ func Heartbeat(conn net.Conn, interval, timeout time.Duration) {
 				return
 			case <-t.C:
 			}
-			if time.Since(time.Unix(0, c.lastPong.Load())) > timeout {
-				c.Close()
+			if silent := time.Since(time.Unix(0, c.lastPong.Load())); silent > timeout {
+				reason := fmt.Sprintf("vtunnel: no pong for %v", silent.Round(time.Millisecond))
+				log.Printf("[vtunnel] %s: %s, closing", c.RemoteAddr(), reason)
+				c.closeWith(websocket.CloseGoingAway, reason)
 				return
 			}
 			c.writeMu.Lock()
 			err := c.Conn.WriteMessage(websocket.TextMessage, []byte(PingText))
 			c.writeMu.Unlock()
 			if err != nil {
+				log.Printf("[vtunnel] %s: ping failed, closing: %v", c.RemoteAddr(), err)
 				c.Close()
 				return
 			}
@@ -277,9 +284,46 @@ func Heartbeat(conn net.Conn, interval, timeout time.Duration) {
 	}()
 }
 
+// Close says goodbye with a close frame before it hangs up.
 func (c *wsConn) Close() error {
-	c.closeOnce.Do(func() { close(c.done) })
+	return c.closeWith(websocket.CloseNormalClosure, "")
+}
+
+// closeWithin bounds the close frame's write: on a link that has gone silent
+// it would otherwise wait for a peer that is not reading.
+const closeWithin = time.Second
+
+// closeWith sends a close frame with code and reason, then closes the
+// connection. Without the frame the peer learns only that the TCP connection
+// ended, and only if that much reaches it: through a proxy — Cloudflare's edge
+// in front of a Durable Object — a connection can end on this side and stay
+// open on the other, and the peer goes on giving the dead session calls.
+func (c *wsConn) closeWith(code int, reason string) error {
+	first := false
+	c.closeOnce.Do(func() {
+		first = true
+		close(c.done)
+	})
+	if first {
+		// gorilla lets WriteControl run beside any other method.
+		c.Conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(closeWithin))
+	}
 	return c.Conn.Close()
+}
+
+// lost reports a connection that ended under the reader, once, unless this
+// side closed it or the peer said a plain goodbye: the peer's close frame with
+// its code and reason, or the network error.
+func (c *wsConn) lost(err error) {
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		return
+	}
+	c.lostOnce.Do(func() { log.Printf("[vtunnel] %s: connection lost: %v", c.RemoteAddr(), err) })
 }
 
 func (c *wsConn) Write(b []byte) (int, error) {

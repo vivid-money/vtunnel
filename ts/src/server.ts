@@ -54,6 +54,8 @@ interface Peer {
   index: Map<string, number>;
   readonly onRoutes: ((routes: [number, string[]][]) => void) | undefined;
   readonly alive: (() => boolean) | undefined;
+  readonly client: string | undefined;
+  readonly since: number;
 }
 
 export interface AttachOptions {
@@ -66,6 +68,49 @@ export interface AttachOptions {
    * way. A session it says is gone is closed rather than used.
    */
   alive?: () => boolean;
+  /**
+   * Who the controller is, the same across its reconnects: what dialParams
+   * reads from its connection's URL. A controller dials again only once it
+   * has given up on its connection, so a session it already has is dead,
+   * whether or not its end of the connection has reached this one yet; it is
+   * closed when the new one attaches, rather than handed calls until
+   * something notices, and its routes pass to the new one until the
+   * controller has declared them again.
+   */
+  client?: string;
+  /**
+   * When the controller connected; default now. Of two sessions from one
+   * client the later one wins, whichever attaches first: sessions rebuilt
+   * after a restart attach in no particular order.
+   */
+  since?: number;
+}
+
+/** The query parameters a controller's connection URL carries (client.go, dialURL). */
+export const CLIENT_PARAM = "vtunnel-client";
+export const KEEPALIVE_PARAM = "vtunnel-keepalive";
+
+/** What a controller says about itself in the URL it connected to. */
+export interface DialParams {
+  /** Who it is, the same across its reconnects: AttachOptions.client. */
+  client?: string;
+  /** How often it pings, if it said. */
+  keepAliveMs?: number;
+}
+
+/**
+ * Reads DialParams from the URL a controller connected to (the WebSocket
+ * upgrade's), ignoring what is not well formed. The parameters are only as
+ * trustworthy as that URL: under yamux-wss the upgrade's signature covers them.
+ */
+export function dialParams(url: string | URL): DialParams {
+  const query = new URL(url).searchParams;
+  const out: DialParams = {};
+  const client = query.get(CLIENT_PARAM);
+  if (client && /^[A-Za-z0-9_-]{1,64}$/.test(client)) out.client = client;
+  const keepAlive = query.get(KEEPALIVE_PARAM);
+  if (keepAlive && /^[0-9]{1,9}$/.test(keepAlive) && Number(keepAlive) > 0) out.keepAliveMs = Number(keepAlive);
+  return out;
 }
 
 export interface Tunnel {
@@ -126,8 +171,36 @@ export class TunnelServer {
       index: new Map(),
       onRoutes: opts.onRoutes,
       alive: opts.alive,
+      client: opts.client,
+      since: opts.since ?? Date.now(),
     };
+    let inherited = false;
+    if (peer.client !== undefined) {
+      for (const other of this.peers) {
+        if (other.client !== peer.client || other.session.isClosed) continue;
+        if (other.since > peer.since) {
+          this.log(`${label}: superseded by ${other.label}, a later connection from the same controller`);
+          session.close(new YamuxError("session_shutdown", "controller reconnected"));
+          return;
+        }
+        this.log(`${other.label}: replaced by ${label}, the same controller reconnected`);
+        // Its routes carry over, for the moment until the controller has
+        // declared them again on this session: it replays every listen under
+        // the port it had, so each one lands on the entry carried here, and
+        // the host is not without a route in between.
+        for (const [port, domains] of other.ports) {
+          if (!peer.ports.has(port)) {
+            peer.ports.set(port, domains);
+            inherited = true;
+          }
+        }
+        // Out of the running now, not once its own attach has unwound.
+        this.peers.delete(other);
+        other.session.close(new YamuxError("session_shutdown", "controller reconnected"));
+      }
+    }
     reindex(peer);
+    if (inherited) peer.onRoutes?.([...peer.ports]);
     this.peers.add(peer);
     this.log(`${label}: connected (${this.peers.size} now)`);
     const keepAlive = this.keepAliveMs > 0 ? this.keepAlive(peer) : undefined;

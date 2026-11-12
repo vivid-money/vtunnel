@@ -100,4 +100,21 @@ describe("TunnelServer against vtunnel.Client", () => {
       expect(res).toStartWith("HTTP/1.1 200");
     }
   }, 30_000);
+
+  test("a controller whose connection went half-open replaces its old session when it reconnects", async () => {
+    // A keepalive short enough for the controller to give up in under a second.
+    h = await new Harness().start(1, ["-keepalive", "200ms"]);
+    h.ws.deafen(0);
+    await h.until(() => h.ws.sessions.length === 2);
+    // Its close never arrived: only the reconnect can have taken it away.
+    expect(h.ws.sessions[0]!.isClosed).toBe(true);
+    expect(h.server.sessions).toBe(1);
+    await h.until(() => h.server.routes("fwd.test:80"));
+    for (let i = 0; i < 3; i++) {
+      const t = await h.server.openTunnel("fwd.test:80");
+      expect(t.session).toBe("pod-2");
+      const res = await exchange(t.stream, "GET http://fwd.test/x HTTP/1.1\r\nHost: fwd.test\r\nConnection: close\r\n\r\n");
+      expect(res).toStartWith("HTTP/1.1 200");
+    }
+  }, 30_000);
 });

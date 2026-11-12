@@ -12,18 +12,42 @@ import { Session, YamuxError, type SessionOptions } from "./yamux.ts";
 export const PING_TEXT = "vtunnel:ping";
 export const PONG_TEXT = "vtunnel:pong";
 
+/**
+ * Closes ws for a session: a plain 1000, or, given why, 1001 with the reason
+ * in the close frame. The Go end logs a close that is not a plain goodbye, so
+ * a controller this end gave up on — not answering, replaced, a protocol
+ * error — can say why it reconnected.
+ */
+export function closeWebSocket(ws: WebSocket, reason?: Error): void {
+  try {
+    if (reason !== undefined) {
+      ws.close(1001, closeReason(reason));
+      return;
+    }
+  } catch {
+    // A client WebSocket may only close with 1000 or an application code.
+  }
+  try {
+    ws.close(1000);
+  } catch {
+    // already closing
+  }
+}
+
+// A close frame's reason is at most 123 bytes of UTF-8.
+function closeReason(reason: Error): string {
+  let text = `vtunnel: ${reason.message}`;
+  const enc = new TextEncoder();
+  while (enc.encode(text).length > 123) text = text.slice(0, -1);
+  return text;
+}
+
 export function sessionOverWebSocket(ws: WebSocket, opts: SessionOptions = {}): Session {
   ws.binaryType = "arraybuffer";
   const session = new Session(
     {
       send: (data) => ws.send(data),
-      close: () => {
-        try {
-          ws.close(1000);
-        } catch {
-          // already closing
-        }
-      },
+      close: (reason) => closeWebSocket(ws, reason),
     },
     opts,
   );
